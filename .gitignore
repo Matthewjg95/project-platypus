@@ -1,0 +1,11 @@
+# build output
+Tab5 3D Render/.pio/
+**/__pycache__/
+meshscan/unitv/build/
+
+# screenshots / captures (regenerate at will)
+**/tools/*.bmp
+**/tools/*.png
+
+# session-local data
+.claude/

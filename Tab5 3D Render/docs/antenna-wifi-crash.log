@@ -1,0 +1,125 @@
+
+Please build project in debug configuration to get more details about an exception.
+See https://docs.platformio.org/page/projectconf/build_configurations.html
+
+
+--- Terminal on COM6 | 115200 8-N-1
+--- Available filters and text transformations: debug, default, direct, esp32_exception_decoder, hexlify, log2file, nocontrol, printable, send_on_enter, time
+--- More details at https://bit.ly/pio-monitor-filters
+--- Quit: Ctrl+C | Menu: Ctrl+T | Help: Ctrl+T followed by Ctrl+H
+[ANT] 1280x720
+[201377][E][Wire.cpp:540] write(): NULL TX buffer pointer
+[201382][E][Wire.cpp:449] endTransmission(): NULL TX buffer pointer
+[201388][E][Wire.cpp:486] requestFrom(): NULL buffer pointer
+[201393][E][Wire.cpp:540] write(): NULL TX buffer pointer
+[201399][E][Wire.cpp:540] write(): NULL TX buffer pointer
+[201404][E][Wire.cpp:449] endTransmission(): NULL TX buffer pointer
+[201410][E][Wire.cpp:540] write(): NULL TX buffer pointer
+[201415][E][Wire.cpp:449] endTransmission(): NULL TX buffer pointer
+[201421][E][Wire.cpp:486] requestFrom(): NULL buffer pointer
+[201426][E][Wire.cpp:540] write(): NULL TX buffer pointer
+[201432][E][Wire.cpp:540] write(): NULL TX buffer pointer
+[201437][E][Wire.cpp:449] endTransmission(): NULL TX buffer pointer
+[EXP] 0x43 P0 ready
+sdio_mempool_create free:29926564 min-free:29923624 lfb-def:29360116 lfb-8bit:29360116
+
+E (203154) sdmmc_common: sdmmc_init_ocr: send_op_cond (1) returned 0x107
+E (203154) sdio_wrapper: sdmmc_card_init failed
+E (204447) H_SDIO_DRV: sdio card init failed
+
+FreeRTOS: FreeRTOS Task "sdio_read" should not return, Aborting now!
+Core  0 register dump:
+MEPC    : 0x4ff0249e  RA      : 0x4ff0ab7a  SP      : 0x4ff2b350  GP      : 0x4ff13280  
+  #0  0x4ff0249e in panic_abort at /home/runner/work/esp32-arduino-lib-builder/esp32-arduino-lib-builder/esp-idf/components/esp_system/panic.c:483
+
+TP      : 0x4ff2b380  T0      : 0x4fc0a9f8  T1      : 0x20000000  T2      : 0xffffffff  
+S0/FP   : 0x4ff14000  S1      : 0x00000000  A0      : 0x4ff1430c  A1      : 0x400bbe53  
+  #0  0x4ff14000 in __global_pointer$ at ??:?
+
+A2      : 0x00000000  A3      : 0x4ff1432f  A4      : 0x00000001  A5      : 0x4ff1c000  
+A6      : 0xa0000000  A7      : 0x0000000a  S2      : 0x00000000  S3      : 0x00000000  
+S4      : 0x00000000  S5      : 0x00000000  S6      : 0x00000000  S7      : 0x00000000  
+S8      : 0x00000000  S9      : 0x00000000  S10     : 0x00000000  S11     : 0x00000000  
+T3      : 0x00000000  T4      : 0x00000000  T5      : 0x00000000  T6      : 0x400632e4  
+MSTATUS : 0x00011880  MTVEC   : 0x4ff00003  MCAUSE  : 0x00000002  MTVAL   : 0x00000000  
+MHARTID : 0x00000000  
+
+Stack memory:
+4ff2b350: 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
+4ff2b370: 0x00000000 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0x00000000 0x4ff29fa8 0x4ff29fa8 0x00000000
+4ff2b390: 0x00000000 0x00000000 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xbaad5678 0x0737bd17
+4ff2b3b0: 0x07052000 0xbc171073 0xbc205073 0xbd205073 0x0c0407b7 0xbd279073 0x600007b7 0x90730785
+4ff2b3d0: 0x5073bc27 0x5073bc30 0x1637bd30 0x06130c04 0x10738006 0x1073bd36 0x5073bc37 0x5073bc40
+4ff2b3f0: 0x0637bd40 0x10730ffc 0x9073bd46 0x5073bc47 0x5073bc50 0x8637bd50 0x10730ffc 0x1073bd56
+4ff2b410: 0x5073bc57 0x5073bc60 0x0637bd60 0x10731000 0x9073bd66 0x5073bc67 0x5073bc70 0x0637bd70
+4ff2b430: 0x167d1180 0xbd761073 0xbc769073 0xbc805073 0xbd805073 0x13000637 0xbd861073 0xbc871073
+4ff2b450: 0xbc905073 0xbd905073 0x13f00637 0xbd961073 0xbc979073 0xbca05073 0xbda05073 0x13f08637
+4ff2b470: 0xbda61073 0xbca71073 0xbcb05073 0xbdb05073 0x13fc05b7 0xbdb59073 0xbcb79073 0xbcc05073
+4ff2b490: 0xbdc05073 0x13ff8637 0x1073167d 0x4ff29f98 0x00000170 0xabba1234 0x00000160 0x4ff2ad30
+4ff2b4b0: 0x00031d7a 0x4ff18734 0x4ff18734 0x4ff2b4ac 0x4ff1872c 0x00000002 0x4ff139f4 0x4ff139f4
+  #0  0x4ff139f4 in __global_pointer$ at ??:?
+  #1  0x4ff139f4 in __global_pointer$ at ??:?
+
+4ff2b4d0: 0x4ff2b4ac 0x00000000 0x00000017 0x4ff29fa8 0x6f696473 0x6165725f 0x00000064 0x00000000
+4ff2b4f0: 0x7fffffff 0x4ff2b3a0 0x0000000b 0x00000000 0x00000017 0x00000000 0x00000000 0x00000000
+4ff2b510: 0x00000c12 0x00000000 0x4ff1c4b0 0x4ff1c518 0x4ff1c580 0x00000000 0x00000000 0x00000001
+4ff2b530: 0x00000000 0x00000000 0x00000000 0x4003c5de 0x00000000 0x00000000 0x00000000 0x00000000
+  #0  0x4003c5de in esp_cleanup_r at /home/runner/work/esp32-arduino-lib-builder/esp32-arduino-lib-builder/esp-idf/components/newlib/newlib_init.c:43
+
+4ff2b550: 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
+4ff2b570: 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
+4ff2b590: 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
+4ff2b5b0: 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
+4ff2b5d0: 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000
+4ff2b5f0: 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0x00000000 0xbaad5678
+4ff2b610: 0x4ff2b49c 0x00000010 0xabba1234 0x00000004 0x4ff2cb38 0xbaad5678 0x00001500 0xabba1234
+4ff2b630: 0x00001400 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5
+4ff2b650: 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5
+4ff2b670: 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5
+4ff2b690: 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5
+4ff2b6b0: 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5
+4ff2b6d0: 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5
+4ff2b6f0: 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5
+4ff2b710: 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5
+4ff2b730: 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5 0xa5a5a5a5
+
+
+
+ELF file SHA256: 770688c0d
+
+Rebooting...
+ESP-ROM:esp32p4-eco2-20240710
+Build:Jul 10 2024
+rst:0xc (SW_CPU_RESET),boot:0x20c (SPI_FAST_FLASH_BOOT)
+Core0 Saved PC:0x4ff02342
+  #0  0x4ff02342 in esp_restart_noos at /home/runner/work/esp32-arduino-lib-builder/esp32-arduino-lib-builder/esp-idf/components/esp_system/port/soc/esp32p4/system_internal.c:218
+
+Core1 Saved PC:0x4ff0534c
+  #0  0x4ff0534c in rv_utils_wait_for_intr at /home/runner/work/esp32-arduino-lib-builder/esp32-arduino-lib-builder/esp-idf/components/riscv/include/riscv/rv_utils.h:62
+      (inlined by) esp_cpu_wait_for_intr at /home/runner/work/esp32-arduino-lib-builder/esp32-arduino-lib-builder/esp-idf/components/esp_hw_support/cpu.c:62
+
+SPI mode:DIO, clock div:1
+load:0x4ff33ce0,len:0x118c
+load:0x4ff2abd0,len:0xcd0
+load:0x4ff2cbd0,len:0x3304
+entry 0x4ff2abd0
+
+=== M5View booting ===
+auto detect board:22
+Display: 1280x720
+[   578][E][SD_MMC.cpp:143] setPins(): SDMMCFS: specified pins are not supported when using IOMUX (SDMMC SLOT 0).
+SD mounted OK
+M5View ready
+[renderer] Ready 640x360  scratch:786432 bytes
+[joystick] Wire SDA=53 SCL=54 addr=0x63
+[joystick] scan: 0x63
+[joystick] CONNECTED  centre x=0 y=1088336320 btn=0
+[viewer] Pipeline 640x360
+[viewer] 11 mesh files
+[mesh_loader] /models/bit-organizer.mesh — verts:3536 faces:7500
+[mesh_loader] Loaded OK  vbuf=21216  fbuf=45000  nbuf=90000 bytes  degenerate:0
+[viewer] Loaded 3536 verts 7500 faces
+[mesh_loader] /models/bearing_15k.mesh — verts:6128 faces:15000
+[mesh_loader] Loaded OK  vbuf=36768  fbuf=90000  nbuf=180000 bytes  degenerate:0
+[viewer] Loaded 6128 verts 15000 faces
+[viewer] on_exit

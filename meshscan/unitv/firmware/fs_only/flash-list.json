@@ -1,0 +1,10 @@
+{
+  "version": "0.1.0",
+  "files": [
+    {
+      "address": 13631488,
+      "bin": "m5stickv_resources.img",
+      "sha256Prefix": false
+    }
+  ]
+}
