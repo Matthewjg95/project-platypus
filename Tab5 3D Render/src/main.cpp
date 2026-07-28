@@ -12,6 +12,9 @@
 #include <SD_MMC.h>
 #include <algorithm>
 
+#include <WiFi.h>
+#include <ArduinoOTA.h>
+
 #include "mesh.h"
 #include "mesh_loader.h"
 #include "renderer.h"
@@ -21,6 +24,7 @@
 #include "viewer_applet.h"
 #include "scanner/scanner_applet.h"
 #include "antenna/antenna_applet.h"
+#include "wifi_creds.h"          // gitignored: OTA_WIFI_SSID/PASS/HOSTNAME
 
 // The scan-finish path (mesh writer + geometry + SD + renderer frames deep in
 // call chains) brushed the default 8KB Arduino loop stack — intermittent panic
@@ -98,8 +102,59 @@ static void poll_serial_commands() {
     }
 }
 
+// ---- WiFi OTA (home screen only) ---------------------------
+// Cable-free flashing: `pio run -e tab5-ota -t upload`. Active ONLY while the
+// shell sits on the home screen so it never fights the applets that manage
+// WiFi themselves (antenna suite, RF survey). Leaving home tears the state
+// down; returning re-joins and re-arms OTA. C6 SDIO pins are set once here.
+// (PT_ prefix: ArduinoOTA.h already claims OTA_IDLE)
+enum PtOtaState { PT_OTA_IDLE, PT_OTA_JOINING, PT_OTA_READY };
+static PtOtaState ota_state = PT_OTA_IDLE;
+static uint32_t ota_join_start = 0;
+static bool     wifi_pins_set  = false;
+
+static void ota_tick(bool at_home) {
+    if (!at_home) {
+        if (ota_state != PT_OTA_IDLE) {
+            ArduinoOTA.end();
+            ota_state = PT_OTA_IDLE;   // applets own the radio from here
+        }
+        return;
+    }
+    switch (ota_state) {
+    case PT_OTA_IDLE:
+        if (!wifi_pins_set) {
+            WiFi.setPins(12, 13, 11, 10, 9, 8, 15);   // M5Tab5 C6 hosted-SDIO
+            wifi_pins_set = true;
+        }
+        WiFi.mode(WIFI_STA);
+        WiFi.begin(OTA_WIFI_SSID, OTA_WIFI_PASS);
+        ota_join_start = millis();
+        ota_state = PT_OTA_JOINING;
+        break;
+    case PT_OTA_JOINING:
+        if (WiFi.status() == WL_CONNECTED) {
+            ArduinoOTA.setHostname(OTA_HOSTNAME);
+            ArduinoOTA.begin();
+            Serial.printf("[ota] ready: %s @ %s\n", OTA_HOSTNAME,
+                          WiFi.localIP().toString().c_str());
+            ota_state = PT_OTA_READY;
+        } else if (millis() - ota_join_start > 20000) {
+            ota_join_start = millis();  // keep retrying quietly
+            WiFi.disconnect();
+            WiFi.begin(OTA_WIFI_SSID, OTA_WIFI_PASS);
+        }
+        break;
+    case PT_OTA_READY:
+        if (WiFi.status() != WL_CONNECTED) { ota_state = PT_OTA_IDLE; break; }
+        ArduinoOTA.handle();
+        break;
+    }
+}
+
 void loop() {
     poll_serial_commands();
+    ota_tick(!shell.is_in_applet());
     shell.update();
     shell.render();
 }
