@@ -14,6 +14,7 @@
 
 #include <WiFi.h>
 #include <ArduinoOTA.h>
+#include <esp_task_wdt.h>
 
 #include "mesh.h"
 #include "mesh_loader.h"
@@ -108,25 +109,21 @@ static void poll_serial_commands() {
 // WiFi themselves (antenna suite, RF survey). Leaving home tears the state
 // down; returning re-joins and re-arms OTA. C6 SDIO pins are set once here.
 // (PT_ prefix: ArduinoOTA.h already claims OTA_IDLE)
-enum PtOtaState { PT_OTA_IDLE, PT_OTA_JOINING, PT_OTA_READY };
+// LIFECYCLE RULE learned from a live freeze: ArduinoOTA/mDNS must be begun
+// AT MOST ONCE per boot on the hosted-WiFi P4 — an end()/begin() cycle on
+// applet exit/entry wedged the loop task inside the second begin(). So: join
+// once, begin once, and applets merely pause handle(). If an applet tears
+// WiFi down (antenna suite), OTA stays suspended until the next reboot
+// rather than risking a re-init hang.
+enum PtOtaState { PT_OTA_IDLE, PT_OTA_JOINING, PT_OTA_READY, PT_OTA_SUSPENDED };
 static PtOtaState ota_state = PT_OTA_IDLE;
 static uint32_t ota_join_start = 0;
-static bool     wifi_pins_set  = false;
 
 static void ota_tick(bool at_home) {
-    if (!at_home) {
-        if (ota_state != PT_OTA_IDLE) {
-            ArduinoOTA.end();
-            ota_state = PT_OTA_IDLE;   // applets own the radio from here
-        }
-        return;
-    }
+    if (!at_home) return;              // applets own the radio; just don't handle()
     switch (ota_state) {
     case PT_OTA_IDLE:
-        if (!wifi_pins_set) {
-            WiFi.setPins(12, 13, 11, 10, 9, 8, 15);   // M5Tab5 C6 hosted-SDIO
-            wifi_pins_set = true;
-        }
+        WiFi.setPins(12, 13, 11, 10, 9, 8, 15);   // M5Tab5 C6 hosted-SDIO
         WiFi.mode(WIFI_STA);
         WiFi.begin(OTA_WIFI_SSID, OTA_WIFI_PASS);
         ota_join_start = millis();
@@ -135,26 +132,87 @@ static void ota_tick(bool at_home) {
     case PT_OTA_JOINING:
         if (WiFi.status() == WL_CONNECTED) {
             ArduinoOTA.setHostname(OTA_HOSTNAME);
-            ArduinoOTA.begin();
+            ArduinoOTA.begin();                   // ONCE per boot, ever
             Serial.printf("[ota] ready: %s @ %s\n", OTA_HOSTNAME,
                           WiFi.localIP().toString().c_str());
             ota_state = PT_OTA_READY;
         } else if (millis() - ota_join_start > 20000) {
-            ota_join_start = millis();  // keep retrying quietly
+            ota_join_start = millis();            // keep retrying quietly
             WiFi.disconnect();
             WiFi.begin(OTA_WIFI_SSID, OTA_WIFI_PASS);
         }
         break;
     case PT_OTA_READY:
-        if (WiFi.status() != WL_CONNECTED) { ota_state = PT_OTA_IDLE; break; }
+        if (WiFi.status() != WL_CONNECTED) {
+            // an applet (or the AP) dropped the link; try to re-associate but
+            // never re-run ArduinoOTA.begin()
+            WiFi.begin(OTA_WIFI_SSID, OTA_WIFI_PASS);
+            ota_state = PT_OTA_SUSPENDED;
+            break;
+        }
         ArduinoOTA.handle();
+        break;
+    case PT_OTA_SUSPENDED:
+        if (WiFi.status() == WL_CONNECTED) ota_state = PT_OTA_READY;
         break;
     }
 }
 
+// Home-screen status chip: WiFi/OTA state + IP, bottom-left. Redrawn on a
+// slow tick because the shell repaints home whenever it goes dirty.
+static void draw_status_chip(bool at_home) {
+    static uint32_t last = 0;
+    if (!at_home || millis() - last < 500) return;
+    last = millis();
+    int h = M5.Display.height();
+    const char* txt; uint16_t col;
+    switch (ota_state) {
+        case PT_OTA_READY:     txt = nullptr;             col = 0x0300; break;
+        case PT_OTA_JOINING:   txt = "WiFi: joining...";  col = 0x39E7; break;
+        case PT_OTA_SUSPENDED: txt = "OTA: reconnecting"; col = 0x8200; break;
+        default:               txt = "WiFi: off";         col = 0x39E7; break;
+    }
+    char buf[48];
+    if (!txt) {
+        snprintf(buf, sizeof(buf), "OTA ready  %s", WiFi.localIP().toString().c_str());
+        txt = buf;
+    }
+    M5.Display.fillRoundRect(12, h - 34, 300, 26, 5, col);
+    M5.Display.setTextSize(1);
+    M5.Display.setTextColor(TFT_WHITE, col);
+    M5.Display.setCursor(22, h - 26);
+    M5.Display.print(txt);
+}
+
+// Serial heartbeat: pinpoints where any future freeze happened (last line
+// before silence) — 5s cadence keeps logs light.
+static void heartbeat(bool at_home) {
+    static uint32_t last = 0;
+    if (millis() - last < 5000) return;
+    last = millis();
+    Serial.printf("[hb] up=%lus home=%d ota=%d heap=%u\n",
+                  (unsigned long)(millis() / 1000), at_home ? 1 : 0,
+                  (int)ota_state, (unsigned)ESP.getFreeHeap());
+}
+
 void loop() {
+    // Task watchdog: a wedged loop now reboots with a WDT report after 60s
+    // instead of hanging forever (a live lockup needed a manual power cycle).
+    static bool wdt_armed = false;
+    if (!wdt_armed) {
+        esp_task_wdt_config_t wcfg = { .timeout_ms = 60000, .idle_core_mask = 0,
+                                       .trigger_panic = true };
+        esp_task_wdt_reconfigure(&wcfg);
+        esp_task_wdt_add(NULL);
+        wdt_armed = true;
+    }
+    esp_task_wdt_reset();
+
+    bool at_home = !shell.is_in_applet();
     poll_serial_commands();
-    ota_tick(!shell.is_in_applet());
+    ota_tick(at_home);
+    heartbeat(at_home);
     shell.update();
     shell.render();
+    draw_status_chip(at_home);
 }
