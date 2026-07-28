@@ -9,3 +9,6 @@ meshscan/unitv/build/
 
 # session-local data
 .claude/
+
+# secrets — never commit
+**/wifi_creds.h
