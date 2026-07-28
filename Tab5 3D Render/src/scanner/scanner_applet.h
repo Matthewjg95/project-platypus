@@ -15,6 +15,7 @@
 #include "scan_geometry.h"
 #include "scan_mesh_writer.h"
 #include "rf_survey.h"
+#include "room_objdb.h"
 #include "../rf_switch.h"
 #include <WiFi.h>
 #include "cv/slam_pipeline.h"
@@ -89,7 +90,7 @@ public:
             _clear_content();
             return true;
         }
-        if (_state == VIEW || _state == SCAN) {
+        if (_state == VIEW || _state == SCAN || _state == LIVE) {
             if (_scanning) _abort_scan();
             _state = BROWSE; _need_redraw = true;
             _reset_touch();
@@ -119,6 +120,7 @@ public:
             case SCAN:   return _update_scan();
             case VIEW:   return _update_view();
             case SURVEY: return _update_survey();
+            case LIVE:   return true;             // passive: draw-only state
         }
         return true;
     }
@@ -130,11 +132,12 @@ public:
             case SCAN:   _draw_scan();  break;
             case VIEW:   _draw_view();  break;
             case SURVEY: if (_rf_redraw) _draw_survey(); break;
+            case LIVE:   _draw_live();  break;
         }
     }
 
 private:
-    enum State { BROWSE, SCAN, VIEW, SURVEY };
+    enum State { BROWSE, SCAN, VIEW, SURVEY, LIVE };
     State _state = BROWSE;
     bool  _paused = false;     // Settings panel open over us
 
@@ -183,6 +186,11 @@ private:
 
     struct AccObj { uint8_t cls; float x,y,z,h; int n; };
     AccObj _acc[64]; int _acc_n = 0;
+
+    // Additive scanning: the room's persistent object database, and whether
+    // the current scan ADDS to it (rescan of an open room) or starts fresh.
+    RoomObjDB _objdb;
+    bool      _additive = false;
     uint8_t _gray[160*120];
 
     // ====================================================
@@ -240,7 +248,8 @@ private:
     static const int BR_ROW_H  = 52;
     static const int BR_LIST_Y = BAR_H + 116;      // scan button stays fixed above
     int  _scroll_px = 0;
-    int  _drag_anchor = -1, _drag_start_px = 0, _drag_px = 0, _last_ty = -1;
+    int  _drag_anchor = -1, _drag_start_px = 0, _drag_px = 0;
+    int  _last_ty = -1, _last_tx = -1;
     bool _drag_active = false;
     uint32_t _press_ms = 0, _last_scroll_draw = 0;
 
@@ -264,10 +273,14 @@ private:
         }
         M5.Display.drawFastHLine(0, BAR_H + 40, dw, COL_DIVIDER);
 
-        // fixed Scan button
-        M5.Display.fillRoundRect(12, BAR_H + 52, dw - 24, 50, 6, 0x2945);
+        // fixed buttons: Scan new room | Live detection viewfinder
+        int split = dw * 2 / 3;
+        M5.Display.fillRoundRect(12, BAR_H + 52, split - 24, 50, 6, 0x2945);
         M5.Display.setTextColor(COL_TEXT); M5.Display.setCursor(28, BAR_H + 68);
         M5.Display.print("+  Scan new room");
+        M5.Display.fillRoundRect(split, BAR_H + 52, dw - split - 12, 50, 6, 0x0300);
+        M5.Display.setCursor(split + 16, BAR_H + 68);
+        M5.Display.print("LIVE VIEW");
 
         // visible window of rooms, pixel-scrolled; clip so partial rows never
         // bleed into the header/scan-button area
@@ -292,26 +305,75 @@ private:
             M5.Display.fillRect(dw - 20, BR_LIST_Y, 8, lh, 0x2945);
             M5.Display.fillRoundRect(dw - 20, bar_y, 8, bar_h, 3, COL_HANDLE);
         }
+        // delete-confirmation modal (opened by long-pressing a room row)
+        if (_del_idx >= 0 && _del_idx < (int)_rooms.size()) {
+            int mx = dw/2 - 220, my = dh/2 - 80;
+            M5.Display.fillRoundRect(mx, my, 440, 170, 10, 0x2104);
+            M5.Display.drawRoundRect(mx, my, 440, 170, 10, COL_DIVIDER);
+            M5.Display.setTextColor(COL_TEXT); M5.Display.setTextSize(2);
+            M5.Display.setCursor(mx + 20, my + 20);
+            M5.Display.printf("Delete '%s'?", _rooms[_del_idx].c_str());
+            M5.Display.setTextSize(1);
+            M5.Display.setCursor(mx + 20, my + 52);
+            M5.Display.print("Removes the mesh, labels, and RF survey.");
+            M5.Display.fillRoundRect(mx + 20, my + 90, 190, 60, 6, 0x8000);
+            M5.Display.setTextSize(2); M5.Display.setTextColor(TFT_WHITE);
+            M5.Display.setCursor(mx + 60, my + 110); M5.Display.print("DELETE");
+            M5.Display.fillRoundRect(mx + 230, my + 90, 190, 60, 6, 0x2945);
+            M5.Display.setCursor(mx + 270, my + 110); M5.Display.print("cancel");
+        }
         M5.Display.endWrite();
         _need_redraw = false;
     }
+
+    // Long-press-to-delete: index of the room awaiting confirmation, or -1.
+    int _del_idx = -1;
 
     bool _update_browse() {
         bool touched = M5.Touch.getCount() > 0;
         int tx = -1, ty = -1;
         if (touched) { auto t = M5.Touch.getDetail(0); tx = t.x; ty = t.y; }
 
+        // delete-confirmation modal swallows all input while open
+        if (_del_idx >= 0) {
+            if (touched && !_prev_touch) {
+                int dw = M5.Display.width(), dh = M5.Display.height();
+                int mx = dw/2 - 220, my = dh/2 - 80;
+                if (ty >= my + 90 && ty < my + 150) {
+                    if (tx >= mx + 20 && tx < mx + 210) {          // DELETE
+                        if (_del_idx < (int)_rooms.size())
+                            _pm.deleteRoom(_building, _rooms[_del_idx].c_str());
+                        _refresh_rooms();
+                    }
+                    _del_idx = -1; _need_redraw = true;            // either btn closes
+                }
+            }
+            _prev_touch = touched;
+            return true;
+        }
+
+        // long-press on a row (held >700ms, barely moved) opens the modal
+        if (touched && _drag_active && _drag_px < 15 &&
+            millis() - _press_ms > 700 && _last_ty >= BR_LIST_Y) {
+            int idx = (_scroll_px + (_last_ty - BR_LIST_Y)) / BR_ROW_H;
+            if (idx >= 0 && idx < (int)_rooms.size()) {
+                _del_idx = idx; _drag_active = false; _need_redraw = true;
+                _prev_touch = touched;
+                return true;
+            }
+        }
+
         // press edge: anchor a potential drag
         if (touched && !_prev_touch && ty >= BAR_H) {
             _drag_anchor = ty; _drag_start_px = _scroll_px;
-            _drag_active = true; _drag_px = 0; _last_ty = ty;
+            _drag_active = true; _drag_px = 0; _last_ty = ty; _last_tx = tx;
             _press_ms = millis();
         }
         // move: pixel-continuous scroll, redraw throttled to ~30ms
         if (touched && _drag_active) {
             int disp = _drag_anchor - ty;
             if (abs(disp) > _drag_px) _drag_px = abs(disp);
-            _last_ty = ty;
+            _last_ty = ty; _last_tx = tx;
             int px = _drag_start_px + disp;
             int max_px = _max_scroll_px();
             if (px < 0) px = 0; if (px > max_px) px = max_px;
@@ -330,7 +392,8 @@ private:
             bool tap = _drag_px < 15 && (millis() - _press_ms) < 350;
             if (tap && _last_ty >= 0) {
                 if (_last_ty >= BAR_H + 52 && _last_ty < BAR_H + 102) {
-                    if (_pipeline_ok) _start_scan();
+                    if (_last_tx >= M5.Display.width() * 2 / 3) _enter_live();
+                    else if (_pipeline_ok) _start_scan();
                 } else if (_last_ty >= BR_LIST_Y) {
                     int idx = (_scroll_px + (_last_ty - BR_LIST_Y)) / BR_ROW_H;
                     if (idx >= 0 && idx < (int)_rooms.size())
@@ -359,8 +422,23 @@ private:
     float    _bias_sum = 0; uint32_t _bias_n = 0;
     uint32_t _imu_last_ms = 0, _last_decode_ms = 0, _last_decode_seq = 0;
 
-    void _start_scan() {
-        _pm.suggestRoomName(_building, _scan_room, sizeof(_scan_room));
+    void _start_scan() { _start_scan_impl(false); }
+
+    // Rescan the currently open room: new observations are registered against
+    // the room's object database (yaw+translation solved from the objects
+    // themselves) and merged, so the model improves instead of resetting.
+    void _start_rescan() {
+        if (!_mesh_loaded) return;
+        _objdb.loadBeside(_mesh_path);        // may be empty for pre-DB rooms
+        _start_scan_impl(true);
+    }
+
+    void _start_scan_impl(bool additive) {
+        _additive = additive;
+        if (!additive) {
+            _pm.suggestRoomName(_building, _scan_room, sizeof(_scan_room));
+            _objdb.clear();
+        }
         _acc_n = 0; _fitter.reset(); _slam.reset();
         _fb.invalidateAll();          // never sample a previous scan's frame
         _scanning = true; _scan_start = millis(); _last_sample = 0; _last_seq = 0;
@@ -558,10 +636,31 @@ private:
     static const int MIN_OBSERVATIONS = 2;
 
     bool _write_phase1(const char* path) {
-        // footprint from CONFIRMED objects only
-        for (int i = 0; i < _acc_n; ++i)
-            if (_acc[i].n >= MIN_OBSERVATIONS)
-                _fitter.addObjectExtent(_acc[i].x, _acc[i].z);
+        // ---- resolve this scan's observations into the object database ----
+        if (_additive && _acc_n > 0) {
+            static RoomObj nw[64];
+            for (int i = 0; i < _acc_n; ++i)
+                nw[i] = { _acc[i].cls, _acc[i].x, _acc[i].y, _acc[i].z,
+                          _acc[i].h, (uint16_t)_acc[i].n };
+            RoomObjDB::Transform T = _objdb.registerScan(nw, _acc_n);
+            Serial.printf("[scanner] rescan registration: %d landmark matches, "
+                          "rot=(%.2f,%.2f) t=(%.2f,%.2f)\n",
+                          T.matches, T.cosr, T.sinr, T.tx, T.tz);
+            for (int i = 0; i < _acc_n; ++i) {
+                float x = nw[i].x, z = nw[i].z;
+                RoomObjDB::apply(T, x, z);
+                _objdb.merge(nw[i].cls, x, nw[i].y, z, nw[i].h, nw[i].n);
+            }
+        } else {
+            for (int i = 0; i < _acc_n; ++i)
+                _objdb.merge(_acc[i].cls, _acc[i].x, _acc[i].y, _acc[i].z,
+                             _acc[i].h, (uint16_t)_acc[i].n);
+        }
+
+        // ---- geometry + labels come from the database (n-confirmed) -------
+        for (int i = 0; i < _objdb.count; ++i)
+            if (_objdb.objs[i].n >= MIN_OBSERVATIONS)
+                _fitter.addObjectExtent(_objdb.objs[i].x, _objdb.objs[i].z);
         RoomBox box = _fitter.fit();
         _geom.reset();
         // Floor plate only — no presumptive walls/ceiling (we can't localize
@@ -571,17 +670,20 @@ private:
         struct LblTmp { float x, y, z; uint8_t cls; };
         static LblTmp tmp[64];        // static: keep ~832B off the loop stack
         int tn = 0;
-        for (int i = 0; i < _acc_n; ++i) {
-            if (_acc[i].n < MIN_OBSERVATIONS) continue;
-            uint32_t col = object_labels::color(_acc[i].cls);
-            float hy = _acc[i].h * 0.5f;
-            _geom.addObjectMarker(object_labels::name(_acc[i].cls),
-                                  _acc[i].x, hy, _acc[i].z, 0.25f, hy, 0.25f,
+        for (int i = 0; i < _objdb.count; ++i) {
+            const RoomObj& o = _objdb.objs[i];
+            if (o.n < MIN_OBSERVATIONS) continue;
+            uint32_t col = object_labels::color(o.cls);
+            float hy = o.h * 0.5f;
+            _geom.addObjectMarker(object_labels::name(o.cls),
+                                  o.x, hy, o.z, 0.25f, hy, 0.25f,
                                   object_labels::red(col), object_labels::green(col),
                                   object_labels::blue(col));
-            if (tn < 64) tmp[tn++] = { _acc[i].x, _acc[i].h, _acc[i].z, _acc[i].cls };
+            if (tn < 64) tmp[tn++] = { o.x, o.h, o.z, o.cls };
         }
-        Serial.printf("[scanner] confirmed objects: %d of %d accumulated\n", tn, _acc_n);
+        Serial.printf("[scanner] db: %d objects (%d confirmed) after %s\n",
+                      _objdb.count, tn, _additive ? "rescan" : "scan");
+        _objdb.saveBeside(path);
 
         float c[3], s; ScanMeshWriter::quantisation(_geom.bounds(), c, s);
         static ScanMeshWriter w;      // static: its 4KB buffer overflowed the
@@ -679,6 +781,11 @@ private:
                     _enter_survey();
                     return true;
                 }
+                if (t.x >= ox + _cv_w - 220 && t.x < ox + _cv_w - 112 &&
+                    t.y >= oy + 4 && t.y < oy + 56) {
+                    _start_rescan();
+                    return true;
+                }
             }
             if (t.y >= BAR_H && _prev_touch && _prev_tx >= 0) {
                 int dx = t.x - _prev_tx, dy = t.y - _prev_ty;
@@ -750,6 +857,10 @@ private:
         _canvas->fillRoundRect(_cv_w - 104, 4, 100, 48, 6, 0x2945);
         _canvas->setTextSize(3); _canvas->setTextColor(TFT_WHITE);
         _canvas->setCursor(_cv_w - 88, 16); _canvas->print("RF");
+        // [SCAN+] button -> additive rescan of this room (registers + merges)
+        _canvas->fillRoundRect(_cv_w - 220, 4, 108, 48, 6, 0x0300);
+        _canvas->setTextSize(2);
+        _canvas->setCursor(_cv_w - 208, 18); _canvas->print("SCAN+");
         int ox = (M5.Display.width() - _cv_w) / 2;
         int oy = (M5.Display.height() - _cv_h) / 2;
         _canvas->pushSprite(ox, oy);
@@ -766,6 +877,65 @@ private:
             _reset_touch();
             _clear_content();             // wipe browse list from around the canvas
         }
+    }
+
+    // ==================== LIVE DETECTION VIEWFINDER =====================
+    // Continuous camera feed with detection boxes + names — no scan, no
+    // geometry, just "what does the AI see right now". Boxes are drawn on the
+    // decode sprite (so they rotate with the preview); names are drawn after
+    // the rotated push using the same rotation mapping, so text stays upright.
+    uint32_t _live_last = 0;
+
+    void _enter_live() {
+        _state = LIVE; _reset_touch();
+        _clear_content();
+        int dw = M5.Display.width(), dh = M5.Display.height();
+        M5.Display.setTextColor(COL_SUBTEXT, COL_BG); M5.Display.setTextSize(2);
+        M5.Display.setCursor(12, dh - 34); M5.Display.print("LIVE  (back to exit)");
+        (void)dw;
+        _live_last = 0;
+    }
+
+    void _draw_live() {
+        uint32_t now = millis();
+        if (now - _live_last < 150) return;            // ~6fps cap
+        const FrameSlot* s = _fb.latest();
+        if (!s || s->seq == _last_decode_seq) return;
+        _live_last = now;
+        _decode_slot(s);                                // decode into _decode
+
+        // detection boxes onto the sprite (full-res dets -> /2 for 160x120)
+        for (uint8_t i = 0; i < s->det_count; ++i) {
+            const Detection& d = s->dets[i];
+            uint32_t col = object_labels::color(d.class_id);
+            uint16_t c565 = ((col >> 8) & 0xF800) | ((col >> 5) & 0x07E0) | ((col >> 3) & 0x001F);
+            _decode->drawRect(d.x / 2, d.y / 2, d.w / 2, d.h / 2, c565);
+        }
+
+        // rotated, 2x-zoomed push, centred in the content area
+        int dw = M5.Display.width(), dh = M5.Display.height();
+        float zoom = 2.0f;
+        int cx = dw / 2, cy = BAR_H + (dh - BAR_H) / 2;
+        _decode->pushRotateZoom(&M5.Display, cx, cy, PREVIEW_ROT_DEG, zoom, zoom);
+
+        // upright name tags via the same +90-degree mapping the push used:
+        // sprite (sx,sy) -> screen (cx - (sy-60)*z, cy + (sx-80)*z)
+        M5.Display.setTextSize(2);
+        for (uint8_t i = 0; i < s->det_count; ++i) {
+            const Detection& d = s->dets[i];
+            float sx = (d.x + d.w * 0.5f) / 2.0f, sy = d.y / 2.0f;
+            int lx = cx - (int)((sy - 60) * zoom);
+            int ly = cy + (int)((sx - 80) * zoom);
+            uint32_t col = object_labels::color(d.class_id);
+            uint16_t c565 = ((col >> 8) & 0xF800) | ((col >> 5) & 0x07E0) | ((col >> 3) & 0x001F);
+            M5.Display.setTextColor(c565, TFT_BLACK);
+            M5.Display.setCursor(lx + 4, ly - 8);
+            M5.Display.printf("%s %d%%", object_labels::name(d.class_id), d.confidence);
+        }
+        // objs counter
+        M5.Display.setTextColor(COL_TEXT, COL_BG);
+        M5.Display.setCursor(12, BAR_H + 10);
+        M5.Display.printf("objs: %-2d", (int)s->det_count);
     }
 
     // ==================== RF SURVEY (heatmap MVP) =======================

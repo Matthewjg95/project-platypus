@@ -96,11 +96,12 @@ bool ProjectManager::deleteRoom(const char* building, const char* room) {
     char path[200];
     if (!meshPath(building, room, path, sizeof(path))) return false;
     bool ok = SD_MMC.remove(path);
-    // remove sidecars too (.lbl object labels, .rf survey) — ignore absence
+    // remove sidecars too (.lbl labels, .rf survey, .objs database)
     char* dot = strrchr(path, '.');
     if (dot) {
-        strcpy(dot, ".lbl"); SD_MMC.remove(path);
-        strcpy(dot, ".rf");  SD_MMC.remove(path);
+        strcpy(dot, ".lbl");  SD_MMC.remove(path);
+        strcpy(dot, ".rf");   SD_MMC.remove(path);
+        strcpy(dot, ".objs"); SD_MMC.remove(path);
     }
     return ok;
 }

@@ -145,7 +145,8 @@ private:
     std::vector<std::string> _files;
 
     // Scroll state
-    int  _scroll_offset     = 0;
+    int  _scroll_offset     = 0;   // PIXELS (matches the scanner's smooth list)
+    uint32_t _press_ms      = 0, _last_scr_draw = 0;
     int  _drawn_offset      = -1;
     bool _need_full_redraw  = true;
     bool _need_rows_update  = false;
@@ -229,47 +230,52 @@ private:
 
     // ---- Browser row drawing -------------------------------
 
-    // Draw a single file row directly to M5.Display
-    void _draw_row(int row, int file_idx, int dw, int dh) {
-        int ry = BR_START_Y + row * BR_ROW_H;
-        if (ry + BR_ROW_H > dh) return;
-        uint16_t bg = (file_idx%2==0) ? (uint16_t)0x2104 : (uint16_t)0x2945;
-        M5.Display.startWrite();
-        M5.Display.fillRect(0, ry, dw, BR_ROW_H-2, bg);
-        M5.Display.setTextColor(COL_TEXT);
-        M5.Display.setTextSize(2);
-        M5.Display.setCursor(16, ry+18);
-        M5.Display.print(_files[file_idx].c_str());
-        M5.Display.setCursor(dw-24, ry+18);
-        M5.Display.print(">");
-        M5.Display.endWrite();
+    int _max_scroll_px(int dh) const {
+        int m = (int)_files.size() * BR_ROW_H - (dh - BR_START_Y);
+        return m > 0 ? m : 0;
     }
 
-    void _clear_row(int row, int dw, int dh) {
-        int ry = BR_START_Y + row * BR_ROW_H;
-        if (ry + BR_ROW_H > dh) return;
-        M5.Display.startWrite();
-        M5.Display.fillRect(0, ry, dw, BR_ROW_H, COL_BG);
-        M5.Display.endWrite();
-    }
-
-    void _draw_scrollbar(int dw, int dh, int max_rows) {
-        if ((int)_files.size() <= max_rows) return;
-        int list_h  = dh - BR_START_Y;
-        int total   = (int)_files.size();
-        int bar_y   = BR_START_Y + (_scroll_offset * list_h / total);
-        int bar_len = max(20, max_rows * list_h / total);
-        M5.Display.startWrite();
+    void _draw_scrollbar(int dw, int dh) {
+        int max_px = _max_scroll_px(dh);
+        if (max_px <= 0) return;
+        int list_h   = dh - BR_START_Y;
+        int total_px = (int)_files.size() * BR_ROW_H;
+        int bar_len  = max(20, list_h * list_h / total_px);
+        int bar_y    = BR_START_Y + (list_h - bar_len) * _scroll_offset / max_px;
         M5.Display.fillRect(dw-8, BR_START_Y, 6, list_h,  0x2945);
         M5.Display.fillRect(dw-8, bar_y,       6, bar_len, COL_HANDLE);
-        M5.Display.endWrite();
     }
 
-    // Full browser redraw — header + all rows
+    // Pixel-smooth visible-rows render (same model as the Room Scan list):
+    // clip to the list area, draw partially-visible rows at pixel offsets.
+    void _do_rows_update() {
+        int dw = M5.Display.width(), dh = M5.Display.height();
+        M5.Display.startWrite();
+        M5.Display.setClipRect(0, BR_START_Y, dw, dh - BR_START_Y);
+        M5.Display.fillRect(0, BR_START_Y, dw, dh - BR_START_Y, COL_BG);
+        int first = _scroll_offset / BR_ROW_H;
+        int y = BR_START_Y - (_scroll_offset % BR_ROW_H);
+        for (int idx = first; idx < (int)_files.size() && y < dh;
+             ++idx, y += BR_ROW_H) {
+            uint16_t bg = (idx%2==0) ? (uint16_t)0x2104 : (uint16_t)0x2945;
+            M5.Display.fillRect(0, y, dw, BR_ROW_H-2, bg);
+            M5.Display.setTextColor(COL_TEXT);
+            M5.Display.setTextSize(2);
+            M5.Display.setCursor(16, y+18);
+            M5.Display.print(_files[idx].c_str());
+            M5.Display.setCursor(dw-24, y+18);
+            M5.Display.print(">");
+        }
+        M5.Display.clearClipRect();
+        _draw_scrollbar(dw, dh);
+        M5.Display.endWrite();
+        _drawn_offset     = _scroll_offset;
+        _need_rows_update = false;
+    }
+
+    // Full browser redraw — header + rows
     void _do_full_redraw() {
         int dw = M5.Display.width(), dh = M5.Display.height();
-        int max_rows = (dh - BR_START_Y) / BR_ROW_H;
-
         M5.Display.startWrite();
         M5.Display.fillRect(0, BAR_H, dw, dh-BAR_H, COL_BG);
         M5.Display.setTextColor(COL_TEXT);
@@ -287,38 +293,9 @@ private:
             M5.Display.print("No .mesh files found");
             M5.Display.endWrite();
         } else {
-            for (int row = 0; row < max_rows; row++) {
-                int idx = row + _scroll_offset;
-                if (idx < (int)_files.size())
-                    _draw_row(row, idx, dw, dh);
-                else
-                    _clear_row(row, dw, dh);
-            }
-            _draw_scrollbar(dw, dh, max_rows);
+            _do_rows_update();
         }
-
-        _drawn_offset     = _scroll_offset;
         _need_full_redraw = false;
-        _need_rows_update = false;
-    }
-
-    // Redraw all visible rows on scroll change.
-    // Simple and correct — 10 rows x (fillRect + text) is fast enough.
-    void _do_rows_update() {
-        int dw       = M5.Display.width(), dh = M5.Display.height();
-        int max_rows = (dh - BR_START_Y) / BR_ROW_H;
-
-        for (int row = 0; row < max_rows; row++) {
-            int idx = row + _scroll_offset;
-            if (idx < (int)_files.size())
-                _draw_row(row, idx, dw, dh);
-            else
-                _clear_row(row, dw, dh);
-        }
-
-        _draw_scrollbar(dw, dh, max_rows);
-        _drawn_offset     = _scroll_offset;
-        _need_rows_update = false;
     }
 
     // ---- Browser update — absolute scroll model ------------
@@ -342,31 +319,34 @@ private:
             _drag_start_offset = _scroll_offset;
             _drag_active       = true;
             _drag_total_px     = 0;
+            _press_ms          = millis();
         }
 
+        // pixel-continuous scroll (matches the Room Scan list feel)
         if (touched && _drag_active && cur_ty >= BAR_H) {
             int displacement = _drag_anchor_y - cur_ty;
-            _drag_total_px   = abs(displacement);
-
-            int max_off = max(0, (int)_files.size() - 1);
-            int new_off = constrain(
-                _drag_start_offset + displacement / BR_ROW_H,
-                0, max_off);
-
-            if (new_off != _scroll_offset) {
+            if (abs(displacement) > _drag_total_px)
+                _drag_total_px = abs(displacement);
+            int dh = M5.Display.height();
+            int new_off = constrain(_drag_start_offset + displacement,
+                                    0, _max_scroll_px(dh));
+            if (new_off != _scroll_offset &&
+                millis() - _last_scr_draw >= 30) {
+                _last_scr_draw    = millis();
                 _scroll_offset    = new_off;
                 _need_rows_update = true;
             }
         }
 
         if (just_released) {
-            bool was_tap   = (_drag_total_px < 15);
+            // tap = barely moved AND brief (dropout-drags can't fake this)
+            bool was_tap   = _drag_total_px < 15 && (millis() - _press_ms) < 350;
             _drag_active   = false;
             _drag_anchor_y = -1;
+            _need_rows_update = true;              // settle final position
 
             if (was_tap && _last_touch_y >= BR_START_Y) {
-                int idx = ((_last_touch_y - BR_START_Y) / BR_ROW_H)
-                          + _scroll_offset;
+                int idx = (_last_touch_y - BR_START_Y + _scroll_offset) / BR_ROW_H;
                 if (idx >= 0 && idx < (int)_files.size()) {
                     _load_file(_files[idx]);
                     return true;
