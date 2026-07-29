@@ -31,6 +31,7 @@
 // ============================================================
 
 #include "vm3.h"   // VM3 trackball (shared with the Room Scanner mesh view)
+#include "ui_feedback.h"
 
 static const int BR_ROW_H   = 60;
 static const int BR_START_Y = BAR_H + 44;
@@ -348,6 +349,7 @@ private:
             if (was_tap && _last_touch_y >= BR_START_Y) {
                 int idx = (_last_touch_y - BR_START_Y + _scroll_offset) / BR_ROW_H;
                 if (idx >= 0 && idx < (int)_files.size()) {
+                    ui_feedback::tick();
                     _load_file(_files[idx]);
                     return true;
                 }

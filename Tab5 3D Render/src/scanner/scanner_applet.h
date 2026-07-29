@@ -17,6 +17,7 @@
 #include "rf_survey.h"
 #include "room_objdb.h"
 #include "../rf_switch.h"
+#include "../ui_feedback.h"
 #include <WiFi.h>
 #include "cv/slam_pipeline.h"
 #include "cv/surface_recon.h"
@@ -343,8 +344,9 @@ private:
                     if (tx >= mx + 20 && tx < mx + 210) {          // DELETE
                         if (_del_idx < (int)_rooms.size())
                             _pm.deleteRoom(_building, _rooms[_del_idx].c_str());
+                        ui_feedback::buzz();
                         _refresh_rooms();
-                    }
+                    } else ui_feedback::tick();                    // cancel
                     _del_idx = -1; _need_redraw = true;            // either btn closes
                 }
             }
@@ -357,6 +359,7 @@ private:
             millis() - _press_ms > 700 && _last_ty >= BR_LIST_Y) {
             int idx = (_scroll_px + (_last_ty - BR_LIST_Y)) / BR_ROW_H;
             if (idx >= 0 && idx < (int)_rooms.size()) {
+                ui_feedback::buzz();               // long-press recognized
                 _del_idx = idx; _drag_active = false; _need_redraw = true;
                 _prev_touch = touched;
                 return true;
@@ -392,12 +395,15 @@ private:
             bool tap = _drag_px < 15 && (millis() - _press_ms) < 350;
             if (tap && _last_ty >= 0) {
                 if (_last_ty >= BAR_H + 52 && _last_ty < BAR_H + 102) {
+                    ui_feedback::tick();
                     if (_last_tx >= M5.Display.width() * 2 / 3) _enter_live();
                     else if (_pipeline_ok) _start_scan();
                 } else if (_last_ty >= BR_LIST_Y) {
                     int idx = (_scroll_px + (_last_ty - BR_LIST_Y)) / BR_ROW_H;
-                    if (idx >= 0 && idx < (int)_rooms.size())
+                    if (idx >= 0 && idx < (int)_rooms.size()) {
+                        ui_feedback::tick();
                         _open_room(_rooms[idx].c_str());
+                    }
                 }
             }
         }
@@ -534,13 +540,14 @@ private:
         // Finish on a completed 360-degree sweep (measured, not assumed) or
         // when the user taps FINISH. No timeout — the sweep is theirs to pace.
         bool full_turn = fabsf(_yaw_rad) >= 2.0f * (float)M_PI;
-        if (full_turn && el > 5000) { _finish_scan(); return true; }
+        if (full_turn && el > 5000) { ui_feedback::buzz2(); _finish_scan(); return true; }
         if (M5.Touch.getCount() > 0) {
             if (!_prev_touch) {
                 _prev_touch = true;
                 auto t = M5.Touch.getDetail(0);
                 int dh = M5.Display.height();
                 if (t.x >= 12 && t.x < 232 && t.y >= dh - 70 && t.y < dh - 14) {
+                    ui_feedback::buzz();
                     _finish_scan();
                     return true;
                 }
@@ -778,11 +785,13 @@ private:
                 int oy = (M5.Display.height() - _cv_h) / 2;
                 if (t.x >= ox + _cv_w - 104 && t.x < ox + _cv_w - 4 &&
                     t.y >= oy + 4 && t.y < oy + 56) {
+                    ui_feedback::tick();
                     _enter_survey();
                     return true;
                 }
                 if (t.x >= ox + _cv_w - 220 && t.x < ox + _cv_w - 112 &&
                     t.y >= oy + 4 && t.y < oy + 56) {
+                    ui_feedback::tick();
                     _start_rescan();
                     return true;
                 }
@@ -885,6 +894,10 @@ private:
     // decode sprite (so they rotate with the preview); names are drawn after
     // the rotated push using the same rotation mapping, so text stays upright.
     uint32_t _live_last = 0;
+    // last frame's name-tag rects — erased each frame so tags can't linger
+    // after their object leaves the frame ("descriptions persist too long")
+    struct TagRect { int16_t x, y, w, h; };
+    TagRect _live_tags[8]; int _live_tag_n = 0;
 
     void _enter_live() {
         _state = LIVE; _reset_touch();
@@ -916,12 +929,20 @@ private:
         int dw = M5.Display.width(), dh = M5.Display.height();
         float zoom = 2.0f;
         int cx = dw / 2, cy = BAR_H + (dh - BAR_H) / 2;
+
+        // erase last frame's name tags FIRST (regions outside the pushed
+        // sprite are never repainted otherwise — tags lingered for ages)
+        for (int i = 0; i < _live_tag_n; ++i)
+            M5.Display.fillRect(_live_tags[i].x, _live_tags[i].y,
+                                _live_tags[i].w, _live_tags[i].h, COL_BG);
+        _live_tag_n = 0;
+
         _decode->pushRotateZoom(&M5.Display, cx, cy, PREVIEW_ROT_DEG, zoom, zoom);
 
         // upright name tags via the same +90-degree mapping the push used:
         // sprite (sx,sy) -> screen (cx - (sy-60)*z, cy + (sx-80)*z)
         M5.Display.setTextSize(2);
-        for (uint8_t i = 0; i < s->det_count; ++i) {
+        for (uint8_t i = 0; i < s->det_count && _live_tag_n < 8; ++i) {
             const Detection& d = s->dets[i];
             float sx = (d.x + d.w * 0.5f) / 2.0f, sy = d.y / 2.0f;
             int lx = cx - (int)((sy - 60) * zoom);
@@ -931,6 +952,8 @@ private:
             M5.Display.setTextColor(c565, TFT_BLACK);
             M5.Display.setCursor(lx + 4, ly - 8);
             M5.Display.printf("%s %d%%", object_labels::name(d.class_id), d.confidence);
+            _live_tags[_live_tag_n++] = { (int16_t)(lx + 2), (int16_t)(ly - 10),
+                                          200, 22 };
         }
         // objs counter
         M5.Display.setTextColor(COL_TEXT, COL_BG);
@@ -1126,10 +1149,12 @@ private:
                         _rf.add(_rf_tap_x, _rf_tap_z, avg, mn, mx, _rf_ant);
                         _rf.computeGrid(_rf_bx0, _rf_bx1, _rf_bz0, _rf_bz1, _rf_ant);
                         _rf.saveBeside(_mesh_path);
-                    }
+                        ui_feedback::tick();               // sample landed
+                    } else ui_feedback::buzz();            // AP not seen
                     _rf_redraw = true;
                 }
             } else if (t.y >= by + 66 && t.y < by + 110) {   // [ANT] layer flip
+                ui_feedback::tick();
                 _rf_ant ^= 1;
                 rf_switch::setExternal(_rf_ant == 1);
                 delay(800);                        // RF path settle before sampling
