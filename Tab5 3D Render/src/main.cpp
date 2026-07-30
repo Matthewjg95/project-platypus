@@ -26,6 +26,7 @@
 #include "scanner/scanner_applet.h"
 #include "antenna/antenna_applet.h"
 #include "wifi_creds.h"          // gitignored: OTA_WIFI_SSID/PASS/HOSTNAME
+#include "ui_feedback.h"
 
 // The scan-finish path (mesh writer + geometry + SD + renderer frames deep in
 // call chains) brushed the default 8KB Arduino loop stack — intermittent panic
@@ -71,6 +72,7 @@ void setup() {
 
     shell.begin(M5.Display.width(), M5.Display.height());
 
+    ui_feedback::begin();        // speaker up + audible boot beep
     Serial.println("M5View ready");
 }
 
