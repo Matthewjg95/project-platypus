@@ -16,13 +16,12 @@ inline void tick() {
     M5.Speaker.tone(4000, 25);
 }
 
-// Weighty event "thunk". NOTE: the raw-PCM percussive version played nothing
-// on this speaker path (playRaw silent where tone() works) — reverted to the
-// tone that audibly worked, on a dedicated channel at HALF volume per user
-// preference. Percussive PCM can be revisited with the device on the desk.
+// Weighty event "thunk". HISTORY: raw-PCM playRaw was silent; explicit
+// channel + setChannelVolume was ALSO silent. Only the plain default-channel
+// tone() has ever produced sound on this path — keep it verbatim and control
+// loudness via master volume in begin(). Do not get clever here again.
 inline void buzz() {
-    M5.Speaker.setChannelVolume(2, 128);
-    M5.Speaker.tone(500, 80, 2, true);
+    M5.Speaker.tone(500, 80);
 }
 
 // double thunk for completions worth celebrating (scan finished, etc.)

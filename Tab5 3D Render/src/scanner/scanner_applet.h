@@ -645,19 +645,20 @@ private:
         // starved the UART drain loop and contributed to RX overflow.
         if (_preview_dirty) {
             _preview_dirty = false;
-            _decode->pushRotateZoom(&M5.Display, dw / 2, BAR_H + 8 + 80,
-                                    PREVIEW_ROT_DEG, 1.0f, 1.0f);
+            // 2x like LIVE view — the 1x preview was a postage stamp
+            _decode->pushRotateZoom(&M5.Display, dw / 2, BAR_H + 10 + 160,
+                                    PREVIEW_ROT_DEG, 2.0f, 2.0f);
         }
         uint32_t el = millis() - _scan_start;
         float deg = fabsf(_yaw_rad) * 180.0f / (float)M_PI;
         int pct = (int)(100.0f * deg / 360.0f); if (pct > 100) pct = 100;
         M5.Display.setTextColor(COL_TEXT, COL_BG); M5.Display.setTextSize(2);
-        M5.Display.setCursor(12, BAR_H + 186);
+        M5.Display.setCursor(12, BAR_H + 344);
         if (el < BIAS_MS)
             M5.Display.print("Face a corner, hold still...");
         else
             M5.Display.printf("Sweep %3d\xF8 %d%% (360=done) ", (int)deg, pct);
-        M5.Display.setCursor(12, BAR_H + 216);
+        M5.Display.setCursor(12, BAR_H + 374);
         M5.Display.printf("%s objs:%d  frames:%d   ",
                           _phase2 ? "SfM" : "box", _acc_n,
                           _phase2 ? _slam.frames() : _fitter.framesProcessed());
@@ -718,13 +719,18 @@ private:
         }
 
         // ---- geometry + labels come from the database (n-confirmed) -------
-        // Footprint scale from LAYOUT-CLASS objects only (big furniture):
-        // a bottle on a desk says nothing about the room's extent.
-        auto layout_cls = [](uint8_t c) {
-            return c == 8 || c == 10 || c == 17 || c == 19;   // chair, table, sofa, tv
+        // Display policy: LAYOUT furniture (chair/table/sofa/tv) + LIVING
+        // things (person/dog/cat — the fun ones) render; small clutter
+        // (bottles etc.) is hidden by default until the per-room object menu
+        // exists. The floor plate sizes to contain everything DISPLAYED, so
+        // markers can never float outside the room — while hidden clutter
+        // can't stretch the layout.
+        auto show_cls = [](uint8_t c) {
+            return c == 8 || c == 10 || c == 17 || c == 19    // layout
+                || c == 14 || c == 11 || c == 7;              // person, dog, cat
         };
         for (int i = 0; i < _objdb.count; ++i)
-            if (_objdb.objs[i].n >= MIN_OBSERVATIONS && layout_cls(_objdb.objs[i].cls))
+            if (_objdb.objs[i].n >= MIN_OBSERVATIONS && show_cls(_objdb.objs[i].cls))
                 _fitter.addObjectExtent(_objdb.objs[i].x, _objdb.objs[i].z);
         RoomBox box = _fitter.fit();
         _geom.reset();
@@ -737,7 +743,7 @@ private:
         int tn = 0;
         for (int i = 0; i < _objdb.count; ++i) {
             const RoomObj& o = _objdb.objs[i];
-            if (o.n < MIN_OBSERVATIONS) continue;
+            if (o.n < MIN_OBSERVATIONS || !show_cls(o.cls)) continue;
             uint32_t col = object_labels::color(o.cls);
             float hy = o.h * 0.5f;
             _geom.addObjectMarker(object_labels::name(o.cls),
