@@ -16,22 +16,13 @@ inline void tick() {
     M5.Speaker.tone(4000, 25);
 }
 
-// Percussive "thunk" — modeled on the power-button reset sound the user
-// liked: a ~280Hz sine burst with a fast exponential decay, played as raw
-// PCM (a square-wave tone() can't sound percussive). Amplitude baked at
-// roughly half of full scale per user preference.
+// Weighty event "thunk". NOTE: the raw-PCM percussive version played nothing
+// on this speaker path (playRaw silent where tone() works) — reverted to the
+// tone that audibly worked, on a dedicated channel at HALF volume per user
+// preference. Percussive PCM can be revisited with the device on the desk.
 inline void buzz() {
-    static int16_t pcm[280];
-    static bool ready = false;
-    if (!ready) {
-        for (int i = 0; i < 280; ++i) {
-            float t = i / 16000.0f;                     // 17.5ms total
-            pcm[i] = (int16_t)(sinf(2.0f * 3.14159f * 280.0f * t)
-                               * expf(-t * 260.0f) * 16000.0f);
-        }
-        ready = true;
-    }
-    M5.Speaker.playRaw(pcm, 280, 16000, false, 1, 0);
+    M5.Speaker.setChannelVolume(2, 128);
+    M5.Speaker.tone(500, 80, 2, true);
 }
 
 // double thunk for completions worth celebrating (scan finished, etc.)

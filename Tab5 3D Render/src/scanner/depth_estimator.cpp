@@ -23,6 +23,14 @@ DepthEstimator::DepthEstimator(int image_width, int image_height, float hfov_deg
     _height_table[15] = 0.40f;  // pottedplant
     _height_table[17] = 0.90f;  // sofa
     _height_table[19] = 0.50f;  // tvmonitor
+
+    // Width references for wide furniture — bbox width varies with viewing
+    // angle less than you'd fear for these (frontal viewing dominates) and
+    // is far less corrupted by partial vertical framing than height.
+    for (int i = 0; i < 20; ++i) _width_table[i] = 0.0f;
+    _width_table[10] = 1.40f;   // diningtable
+    _width_table[17] = 1.90f;   // sofa
+    _width_table[19] = 0.55f;   // tvmonitor
 }
 
 float DepthEstimator::referenceHeight(uint8_t class_id) const {
@@ -43,7 +51,13 @@ ObjectEstimate DepthEstimator::estimate(uint8_t class_id,
     e.real_height = referenceHeight(class_id);
     if (e.real_height <= 0.0f || bbox_h_px == 0) { e.valid = false; return e; }
 
-    e.distance = (e.real_height * _focal_px) / (float)bbox_h_px;
+    // wide-furniture classes range by WIDTH (the stabler scale cue);
+    // everything else by height
+    float ref_w = (class_id < 20) ? _width_table[class_id] : 0.0f;
+    if (ref_w > 0.0f && bbox_w > 0)
+        e.distance = (ref_w * _focal_px) / (float)bbox_w;
+    else
+        e.distance = (e.real_height * _focal_px) / (float)bbox_h_px;
 
     // Horizontal angle of the bbox centre off the optical axis.
     float cx = (float)bbox_x + (float)bbox_w * 0.5f;

@@ -502,6 +502,41 @@ private:
 
     bool _preview_dirty = false;   // push the rotated preview only when it changed
 
+    // ---- detection display policy (pure logic, portable) -----------------
+    // "Confident and discerning": a detection is shown only if it clears a
+    // confidence floor AND its class was also present in the previous
+    // inference (~300ms persistence) — kills one-frame flicker.
+    static const uint8_t DISPLAY_CONF = 22;
+    uint32_t _seen_prev = 0, _seen_cur = 0, _seen_seq = 0;
+
+    void _det_note_frame(const FrameSlot* s) {
+        if (s->seq == _seen_seq) return;
+        _seen_seq = s->seq;
+        _seen_prev = _seen_cur;
+        _seen_cur = 0;
+        for (uint8_t i = 0; i < s->det_count; ++i)
+            if (s->dets[i].class_id < 20 && s->dets[i].confidence >= DISPLAY_CONF)
+                _seen_cur |= (1u << s->dets[i].class_id);
+    }
+    bool _det_display(const Detection& d) const {
+        return d.class_id < 20 && d.confidence >= DISPLAY_CONF &&
+               ((_seen_prev >> d.class_id) & 1);
+    }
+
+    static uint16_t _cls565(uint8_t cls) {
+        uint32_t col = object_labels::color(cls);
+        return ((col >> 8) & 0xF800) | ((col >> 5) & 0x07E0) | ((col >> 3) & 0x001F);
+    }
+
+    // draw display-worthy detection boxes onto the decode sprite
+    void _draw_dets_on_decode(const FrameSlot* s) {
+        for (uint8_t i = 0; i < s->det_count; ++i) {
+            const Detection& d = s->dets[i];
+            if (!_det_display(d)) continue;
+            _decode->drawRect(d.x / 2, d.y / 2, d.w / 2, d.h / 2, _cls565(d.class_id));
+        }
+    }
+
     // Decode-only path for the live preview (no grayscale / fitter work).
     void _decode_slot(const FrameSlot* slot) {
         _decode->fillSprite(TFT_BLACK);
@@ -524,6 +559,11 @@ private:
         }
         if (_phase2) _slam.addFrame(_gray, 160, 120);
         else         _fitter.addFrame(_gray, yaw);
+
+        // detection boxes on the preview (drawn AFTER the grayscale extract
+        // so the fitter never sees the overlay pixels)
+        _det_note_frame(slot);
+        _draw_dets_on_decode(slot);
 
         for (uint8_t i = 0; i < slot->det_count; ++i) {
             const Detection& d = slot->dets[i];
@@ -554,10 +594,16 @@ private:
             }
         } else _prev_touch = false;
 
-        // live preview: decode newly arrived frames between samples
+        // live preview: decode newly arrived frames between samples,
+        // WITH detection boxes (user request: live feed inside the scan too)
         if (now - _last_decode_ms >= PREVIEW_MS) {
             const FrameSlot* p = _fb.latest();
-            if (p && p->seq != _last_decode_seq) { _decode_slot(p); _last_decode_ms = now; }
+            if (p && p->seq != _last_decode_seq) {
+                _decode_slot(p);
+                _det_note_frame(p);
+                _draw_dets_on_decode(p);
+                _last_decode_ms = now;
+            }
         }
 
         if (now - _last_sample >= SAMPLE_MS) {
@@ -608,7 +654,7 @@ private:
         M5.Display.setTextColor(COL_TEXT, COL_BG); M5.Display.setTextSize(2);
         M5.Display.setCursor(12, BAR_H + 186);
         if (el < BIAS_MS)
-            M5.Display.print("Hold still...              ");
+            M5.Display.print("Face a corner, hold still...");
         else
             M5.Display.printf("Sweep %3d\xF8 %d%% (360=done) ", (int)deg, pct);
         M5.Display.setCursor(12, BAR_H + 216);
@@ -623,6 +669,13 @@ private:
         char path[200];
         if (!_pm.meshPath(_building, _scan_room, path, sizeof(path))) { _state = BROWSE; _need_redraw = true; return; }
         bool ok = _phase2 ? _write_phase2(path) : _write_phase1(path);
+        {   // save-verification log for the "SCAN+ didn't save?" question
+            File chk = SD_MMC.open(path, FILE_READ);
+            Serial.printf("[scanner] wrote %s -> %s (%u bytes)\n", path,
+                          ok ? "ok" : "FAILED",
+                          chk ? (unsigned)chk.size() : 0u);
+            if (chk) chk.close();
+        }
         if (ok && load_mesh(path, _mesh)) {
             strncpy(_mesh_path, path, sizeof(_mesh_path)-1); _mesh_path[sizeof(_mesh_path)-1]='\0';
             _mesh_loaded = true;
@@ -665,8 +718,13 @@ private:
         }
 
         // ---- geometry + labels come from the database (n-confirmed) -------
+        // Footprint scale from LAYOUT-CLASS objects only (big furniture):
+        // a bottle on a desk says nothing about the room's extent.
+        auto layout_cls = [](uint8_t c) {
+            return c == 8 || c == 10 || c == 17 || c == 19;   // chair, table, sofa, tv
+        };
         for (int i = 0; i < _objdb.count; ++i)
-            if (_objdb.objs[i].n >= MIN_OBSERVATIONS)
+            if (_objdb.objs[i].n >= MIN_OBSERVATIONS && layout_cls(_objdb.objs[i].cls))
                 _fitter.addObjectExtent(_objdb.objs[i].x, _objdb.objs[i].z);
         RoomBox box = _fitter.fit();
         _geom.reset();
@@ -690,7 +748,8 @@ private:
         }
         Serial.printf("[scanner] db: %d objects (%d confirmed) after %s\n",
                       _objdb.count, tn, _additive ? "rescan" : "scan");
-        _objdb.saveBeside(path);
+        if (!_objdb.saveBeside(path))
+            Serial.printf("[scanner] WARN: .objs save FAILED for %s\n", path);
 
         float c[3], s; ScanMeshWriter::quantisation(_geom.bounds(), c, s);
         static ScanMeshWriter w;      // static: its 4KB buffer overflowed the
@@ -916,14 +975,8 @@ private:
         if (!s || s->seq == _last_decode_seq) return;
         _live_last = now;
         _decode_slot(s);                                // decode into _decode
-
-        // detection boxes onto the sprite (full-res dets -> /2 for 160x120)
-        for (uint8_t i = 0; i < s->det_count; ++i) {
-            const Detection& d = s->dets[i];
-            uint32_t col = object_labels::color(d.class_id);
-            uint16_t c565 = ((col >> 8) & 0xF800) | ((col >> 5) & 0x07E0) | ((col >> 3) & 0x001F);
-            _decode->drawRect(d.x / 2, d.y / 2, d.w / 2, d.h / 2, c565);
-        }
+        _det_note_frame(s);
+        _draw_dets_on_decode(s);                        // confidence+persistence filtered
 
         // rotated, 2x-zoomed push, centred in the content area
         int dw = M5.Display.width(), dh = M5.Display.height();
@@ -944,11 +997,11 @@ private:
         M5.Display.setTextSize(2);
         for (uint8_t i = 0; i < s->det_count && _live_tag_n < 8; ++i) {
             const Detection& d = s->dets[i];
+            if (!_det_display(d)) continue;             // discerning tags too
             float sx = (d.x + d.w * 0.5f) / 2.0f, sy = d.y / 2.0f;
             int lx = cx - (int)((sy - 60) * zoom);
             int ly = cy + (int)((sx - 80) * zoom);
-            uint32_t col = object_labels::color(d.class_id);
-            uint16_t c565 = ((col >> 8) & 0xF800) | ((col >> 5) & 0x07E0) | ((col >> 3) & 0x001F);
+            uint16_t c565 = _cls565(d.class_id);
             M5.Display.setTextColor(c565, TFT_BLACK);
             M5.Display.setCursor(lx + 4, ly - 8);
             M5.Display.printf("%s %d%%", object_labels::name(d.class_id), d.confidence);

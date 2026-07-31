@@ -48,4 +48,7 @@ private:
     int   _w, _h;
     float _focal_px;
     float _height_table[20];   // metres, indexed by VOC-20 class_id; 0 = unknown
+    float _width_table[20];    // metres; >0 = width-based ranging preferred
+                               // (bbox width is the stabler scale cue for
+                               // wide furniture: sofa, table, monitor)
 };
