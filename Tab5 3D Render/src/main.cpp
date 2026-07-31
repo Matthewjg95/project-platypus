@@ -25,6 +25,7 @@
 #include "viewer_applet.h"
 #include "scanner/scanner_applet.h"
 #include "antenna/antenna_applet.h"
+#include "shadowscan/shadowscan_applet.h"
 #include "wifi_creds.h"          // gitignored: OTA_WIFI_SSID/PASS/HOSTNAME
 #include "ui_feedback.h"
 
@@ -67,6 +68,7 @@ void setup() {
     shell.register_applet(new ViewerApplet());
     shell.register_applet(new ScannerApplet());
     shell.register_applet(new AntennaApplet());
+    shell.register_applet(new ShadowScanApplet());
     // Future applets go here:
     // shell.register_applet(new NotesApplet());
 
