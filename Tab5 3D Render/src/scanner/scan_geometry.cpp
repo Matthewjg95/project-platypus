@@ -94,6 +94,23 @@ void ScanGeometry::addFloorPlate(float cx, float cz, float width, float depth,
     addOrientedTri(v1,v2,v6,rcx,rcy,rcz,false); addOrientedTri(v1,v6,v5,rcx,rcy,rcz,false);
 }
 
+// Slim arrow lying just above the floor at the origin, tip toward +Z (the
+// direction faced at scan start). Triangles added in both windings so it
+// renders regardless of view side.
+void ScanGeometry::addOriginArrow(float half_w, float len) {
+    const float y = 0.035f;                 // float above the plate, no z-fight
+    uint32_t tip = addVertex(0.0f,  y, len);
+    uint32_t bl  = addVertex(-half_w, y, 0.0f);
+    uint32_t br  = addVertex( half_w, y, 0.0f);
+    uint32_t tail= addVertex(0.0f,  y, -0.12f);
+    if (_fcount + 4 <= _fcap) {
+        _fi[_fcount*3+0]=tip; _fi[_fcount*3+1]=bl;  _fi[_fcount*3+2]=br;  ++_fcount;
+        _fi[_fcount*3+0]=tip; _fi[_fcount*3+1]=br;  _fi[_fcount*3+2]=bl;  ++_fcount;
+        _fi[_fcount*3+0]=bl;  _fi[_fcount*3+1]=tail;_fi[_fcount*3+2]=br;  ++_fcount;
+        _fi[_fcount*3+0]=bl;  _fi[_fcount*3+1]=br;  _fi[_fcount*3+2]=tail;++_fcount;
+    }
+}
+
 void ScanGeometry::addObjectMarker(const char* label, float cx, float cy, float cz,
                                    float hx, float hy, float hz,
                                    uint8_t r, uint8_t g, uint8_t b) {

@@ -732,11 +732,13 @@ private:
         for (int i = 0; i < _objdb.count; ++i)
             if (_objdb.objs[i].n >= MIN_OBSERVATIONS && show_cls(_objdb.objs[i].cls))
                 _fitter.addObjectExtent(_objdb.objs[i].x, _objdb.objs[i].z);
+        _fitter.addObjectExtent(0.0f, 0.0f);   // the plate always covers the origin
         RoomBox box = _fitter.fit();
         _geom.reset();
         // Floor plate only — no presumptive walls/ceiling (we can't localize
         // walls monocularly; Phase 2 will place evidence-based thin walls).
         _geom.addFloorPlate(box.cx, box.cz, box.width, box.depth);
+        _geom.addOriginArrow();                // where the (first) scan began
 
         struct LblTmp { float x, y, z; uint8_t cls; };
         static LblTmp tmp[64];        // static: keep ~832B off the loop stack
@@ -772,7 +774,14 @@ private:
         // Label anchors (marker tops), quantised into the mesh's int16 space
         // so the viewer projects them with zero knowledge of the scan frame.
         _label_n = 0;
-        for (int i = 0; i < tn; ++i) {
+        {   // "start" tag at the origin arrow (pseudo-class 200)
+            RoomLabel& L = _labels[_label_n++];
+            L.x = (int16_t)((0.0f - c[0]) * s);
+            L.y = (int16_t)(-(0.30f - c[1]) * s);
+            L.z = (int16_t)((0.0f - c[2]) * s);
+            L.cls = 200;
+        }
+        for (int i = 0; i < tn && _label_n < 64; ++i) {
             RoomLabel& L = _labels[_label_n++];
             L.x = (int16_t)((tmp[i].x - c[0]) * s);
             L.y = (int16_t)(-(tmp[i].y - c[1]) * s);   // mirror Y like addVertexModel
@@ -784,6 +793,15 @@ private:
     }
 
     // ---- label sidecar: <room>.lbl beside <room>.mesh --------------------
+    // cls 200 = the origin/"start" pseudo-class (not a VOC id)
+    static const char* _label_name(uint8_t cls) {
+        return cls == 200 ? "start" : object_labels::name(cls);
+    }
+    static uint16_t _label_color(uint8_t cls) {
+        if (cls == 200) return TFT_WHITE;
+        uint32_t col = object_labels::color(cls);
+        return ((col >> 8) & 0xF800) | ((col >> 5) & 0x07E0) | ((col >> 3) & 0x001F);
+    }
     struct RoomLabel { int16_t x, y, z; uint8_t cls; };
     RoomLabel _labels[64]; int _label_n = 0;
 
@@ -913,9 +931,8 @@ private:
                 int sxp = (int)(rx * inv) + _cv_w / 2;
                 int syp = (int)(ry * inv) + _cv_h / 2;
                 if (sxp < 2 || sxp >= _cv_w - 2 || syp < 10 || syp >= _cv_h - 2) continue;
-                const char* nm = object_labels::name(_labels[i].cls);
-                uint32_t col = object_labels::color(_labels[i].cls);
-                uint16_t c565 = ((col >> 8) & 0xF800) | ((col >> 5) & 0x07E0) | ((col >> 3) & 0x001F);
+                const char* nm = _label_name(_labels[i].cls);
+                uint16_t c565 = _label_color(_labels[i].cls);
                 int tw = (int)strlen(nm) * 6;
                 _canvas->setTextColor(c565, TFT_BLACK);
                 _canvas->setCursor(sxp - tw / 2, syp - 10);   // just above the marker top
@@ -1267,7 +1284,7 @@ private:
             M5.Display.fillRect(sx - 3, sy - 3, 6, 6, TFT_WHITE);
             M5.Display.setTextColor(TFT_WHITE);
             M5.Display.setCursor(sx + 5, sy - 4);
-            M5.Display.print(object_labels::name(_labels[i].cls));
+            M5.Display.print(_label_name(_labels[i].cls));
         }
         // sample discs — active antenna layer only
         for (int i = 0; i < _rf.count(); ++i) {

@@ -23,6 +23,9 @@ public:
     void addBoxRoom(float cx, float cz, float width, float depth, float height);
     void addFloorPlate(float cx, float cz, float width, float depth,
                        float thickness = 0.06f);
+    // Flat arrow at the scan origin (0,0,0) pointing +Z — marks where the
+    // scan began and the direction faced (the corner, per convention).
+    void addOriginArrow(float half_w = 0.18f, float len = 0.45f);
     void addObjectMarker(const char* label, float cx, float cy, float cz,
                          float hx, float hy, float hz,
                          uint8_t r, uint8_t g, uint8_t b);
