@@ -32,6 +32,7 @@
 
 #include "vm3.h"   // VM3 trackball (shared with the Room Scanner mesh view)
 #include "ui_feedback.h"
+#include "ui_theme.h"
 
 static const int BR_ROW_H   = 60;
 static const int BR_START_Y = BAR_H + 44;
@@ -113,7 +114,7 @@ public:
     }
 
     bool on_update() override {
-        _joystick.update();
+        // _joystick.update();   // disabled with the joystick (see _init_pipeline)
         if (_state == STATE_FILE_BROWSER) return _update_browser();
         return _update_viewer();
     }
@@ -193,7 +194,11 @@ private:
             8192, this, 2, &_disp_task, 0
         );
 
-        _joystick.begin(0x63);
+        // Joystick DISABLED: the hardware was removed, and its I2C probe ran
+        // on GPIO 53/54 — which are now the UnitV camera's UART lines. The
+        // driver stays for a future M5BUS-wired joystick; connected() simply
+        // remains false without begin().
+        // _joystick.begin(0x63);
         _pipeline_ready = true;
         Serial.printf("[viewer] Pipeline %dx%d\n", _cv_w, _cv_h);
     }
@@ -256,17 +261,18 @@ private:
         M5.Display.fillRect(0, BR_START_Y, dw, dh - BR_START_Y, COL_BG);
         int first = _scroll_offset / BR_ROW_H;
         int y = BR_START_Y - (_scroll_offset % BR_ROW_H);
+        ui_theme::font_body(&M5.Display);
         for (int idx = first; idx < (int)_files.size() && y < dh;
              ++idx, y += BR_ROW_H) {
-            uint16_t bg = (idx%2==0) ? (uint16_t)0x2104 : (uint16_t)0x2945;
+            uint16_t bg = (idx%2==0) ? ui_theme::SURFACE : ui_theme::SURFACE_2;
             M5.Display.fillRect(0, y, dw, BR_ROW_H-2, bg);
             M5.Display.setTextColor(COL_TEXT);
-            M5.Display.setTextSize(2);
             M5.Display.setCursor(16, y+18);
             M5.Display.print(_files[idx].c_str());
             M5.Display.setCursor(dw-24, y+18);
             M5.Display.print(">");
         }
+        ui_theme::font_mono(&M5.Display);
         M5.Display.clearClipRect();
         _draw_scrollbar(dw, dh);
         M5.Display.endWrite();
@@ -279,10 +285,11 @@ private:
         int dw = M5.Display.width(), dh = M5.Display.height();
         M5.Display.startWrite();
         M5.Display.fillRect(0, BAR_H, dw, dh-BAR_H, COL_BG);
+        ui_theme::font_button(&M5.Display);
         M5.Display.setTextColor(COL_TEXT);
-        M5.Display.setTextSize(2);
         M5.Display.setCursor(12, BAR_H+10);
-        M5.Display.print("Select a model:");
+        M5.Display.print("Select a model");
+        ui_theme::font_mono(&M5.Display);
         M5.Display.drawFastHLine(0, BAR_H+40, dw, COL_DIVIDER);
         M5.Display.endWrite();
 

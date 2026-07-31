@@ -11,9 +11,10 @@
 
 namespace ui_feedback {
 
-// light tap acknowledgement
+// light tap acknowledgement (2.5kHz: softer than the original 4kHz "too
+// high pitch and loud" report; loudness governed by master volume in begin)
 inline void tick() {
-    M5.Speaker.tone(4000, 25);
+    M5.Speaker.tone(2500, 15);
 }
 
 // Weighty event "thunk". HISTORY: raw-PCM playRaw was silent; explicit
@@ -33,7 +34,7 @@ inline void buzz2() {
 // call once at boot: speaker bring-up + audible proof-of-life
 inline void begin() {
     M5.Speaker.begin();
-    M5.Speaker.setVolume(255);
+    M5.Speaker.setVolume(130);      // master loudness ("too loud" at 255)
     M5.Speaker.tone(1200, 60);      // boot beep — if you can't hear this,
     M5.Speaker.tone(1800, 60, 1, false);  // the speaker path is the problem
 }

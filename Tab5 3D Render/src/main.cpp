@@ -28,6 +28,7 @@
 #include "shadowscan/shadowscan_applet.h"
 #include "wifi_creds.h"          // gitignored: OTA_WIFI_SSID/PASS/HOSTNAME
 #include "ui_feedback.h"
+#include "ui_icons.h"
 
 // The scan-finish path (mesh writer + geometry + SD + renderer frames deep in
 // call chains) brushed the default 8KB Arduino loop stack — intermittent panic
@@ -72,9 +73,8 @@ void setup() {
     // Future applets go here:
     // shell.register_applet(new NotesApplet());
 
-    shell.begin(M5.Display.width(), M5.Display.height());
-
-    ui_feedback::begin();        // speaker up + audible boot beep
+    ui_feedback::begin();        // speaker up + boot beep (default volume)
+    shell.begin(M5.Display.width(), M5.Display.height());   // applies saved volume/brightness
     Serial.println("M5View ready");
 }
 
@@ -181,10 +181,13 @@ static void draw_status_chip(bool at_home) {
         snprintf(buf, sizeof(buf), "OTA ready  %s", WiFi.localIP().toString().c_str());
         txt = buf;
     }
-    M5.Display.fillRoundRect(12, h - 34, 300, 26, 5, col);
+    int w = M5.Display.width();
+    M5.Display.fillRoundRect(w - 312, h - 34, 300, 26, 5, col);   // bottom-right, clear of tiles
+    ui_icons::wifi(&M5.Display, w - 294, h - 16, 18, TFT_WHITE);
+    M5.Display.setFont(&fonts::Font0);
     M5.Display.setTextSize(1);
     M5.Display.setTextColor(TFT_WHITE, col);
-    M5.Display.setCursor(22, h - 26);
+    M5.Display.setCursor(w - 278, h - 26);
     M5.Display.print(txt);
 }
 

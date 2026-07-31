@@ -2,8 +2,11 @@
 #include <M5Unified.h>
 #include <M5GFX.h>
 #include <vector>
+#include <SD_MMC.h>
 #include "applet.h"
 #include "ui_constants.h"
+#include "ui_theme.h"
+#include "ui_icons.h"
 
 // ============================================================
 // shell.h — App shell for M5View
@@ -20,6 +23,9 @@ public:
     void begin(int display_w, int display_h) {
         _w = display_w;
         _h = display_h;
+        _load_ui_cfg();
+        M5.Speaker.setVolume(_ui_vol);
+        M5.Display.setBrightness(_ui_bright);
         _state           = STATE_HOME;
         _active          = -1;
         _settings_open   = false;
@@ -103,6 +109,67 @@ private:
     int  _prev_tx = -1, _prev_ty = -1;
     bool _prev_touched = false;
 
+    // ---- real settings: volume + brightness sliders, persisted ---------
+    uint8_t _ui_vol = 130, _ui_bright = 255;
+    int     _adj = 0;                       // 0 none, 1 volume, 2 brightness
+    static constexpr const char* UI_CFG = "/m5view_ui.cfg";
+
+    void _load_ui_cfg() {
+        File f = SD_MMC.open(UI_CFG, FILE_READ);
+        if (!f) return;
+        char m[4];
+        if (f.read((uint8_t*)m, 4) == 4 && memcmp(m, "UIC1", 4) == 0) {
+            f.read(&_ui_vol, 1);
+            f.read(&_ui_bright, 1);
+            if (_ui_bright < 20) _ui_bright = 20;   // never save yourself blind
+        }
+        f.close();
+    }
+    void _save_ui_cfg() {
+        File f = SD_MMC.open(UI_CFG, FILE_WRITE);
+        if (!f) return;
+        f.write((const uint8_t*)"UIC1", 4);
+        f.write(&_ui_vol, 1);
+        f.write(&_ui_bright, 1);
+        f.close();
+    }
+
+    // slider geometry (shared by draw + touch)
+    void _slider_rect(int which, int& x, int& y, int& w, int& h) {
+        x = 250; w = _w - x - 60; h = 40;
+        y = _settings_y + (which == 1 ? 84 : 164);
+    }
+
+    // continuous slider handling while the settings panel is open.
+    // returns true if the touch was consumed by a slider.
+    bool _settings_sliders(bool touched, int tx, int ty) {
+        if (!_settings_open) return false;
+        if (!touched) {
+            if (_adj) {                      // release: persist + audible preview
+                _save_ui_cfg();
+                if (_adj == 1) M5.Speaker.tone(2500, 30);
+                _adj = 0;
+            }
+            return false;
+        }
+        for (int which = 1; which <= 2; ++which) {
+            int x, y, w, h; _slider_rect(which, x, y, w, h);
+            bool inside = tx >= x - 10 && tx < x + w + 10 &&
+                          ty >= y - 10 && ty < y + h + 10;
+            if ((_adj == which) || (_adj == 0 && inside)) {
+                _adj = which;
+                int v = (tx - x) * 255 / (w > 0 ? w : 1);
+                if (v < 0) v = 0; if (v > 255) v = 255;
+                if (which == 1) { _ui_vol = (uint8_t)v; M5.Speaker.setVolume(_ui_vol); }
+                else { if (v < 20) v = 20; _ui_bright = (uint8_t)v;
+                       M5.Display.setBrightness(_ui_bright); }
+                _settings_dirty = true;
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Pause/resume the active applet generically (no concrete-type knowledge).
     void _pause_active()  { if (_active >= 0) _applets[_active]->on_pause(); }
     void _resume_active() { if (_active >= 0) _applets[_active]->on_resume(); }
@@ -113,6 +180,12 @@ private:
         if (touched) {
             auto t = M5.Touch.getDetail(0);
             tx = t.x; ty = t.y;
+        }
+
+        // live slider drags own the touch while the settings panel is open
+        if (_settings_sliders(touched, tx, ty)) {
+            _prev_touched = touched; _prev_tx = tx; _prev_ty = ty;
+            return;
         }
 
         bool tapped = (_prev_touched && !touched);
@@ -218,12 +291,17 @@ private:
         M5.Display.startWrite();
         M5.Display.fillScreen(COL_BG);
         M5.Display.fillRect(0, 0, _w, BAR_H, COL_BAR);
-        M5.Display.setTextSize(2);
+        ui_theme::font_button(&M5.Display);
         M5.Display.setTextColor(COL_TEXT);
-        M5.Display.setCursor(12, 18);
-        M5.Display.print("M5View");
+        M5.Display.setCursor(14, 12);
+        M5.Display.print("PLATYPUS");
+        ui_theme::font_mono1(&M5.Display);
+        M5.Display.setTextColor(COL_SUBTEXT);
+        M5.Display.setCursor(_w / 2 - 40, 22);
+        M5.Display.print("m5view shell");
         M5.Display.drawFastHLine(0, BAR_H, _w, COL_DIVIDER);
         _draw_tiles();
+        ui_theme::font_mono(&M5.Display);   // leave state predictable
         M5.Display.endWrite();
     }
 
@@ -260,18 +338,25 @@ private:
 
             M5.Display.fillRoundRect(tx, ty, tw, th, TILE_RADIUS, COL_TILE);
 
-            M5.Display.setTextSize(4);
-            M5.Display.setTextColor(COL_TEXT);
-            M5.Display.setCursor(tx + tw/2 - 16, ty + th/2 - 32);
-            M5.Display.print(_applets[i]->icon());
-
-            M5.Display.setTextSize(2);
-            M5.Display.setTextColor(COL_SUBTEXT);
+            // vector glyph chosen by applet name (shell stays type-agnostic)
             const char* lbl = _applets[i]->name();
-            int lw = strlen(lbl) * 12;
-            M5.Display.setCursor(tx + tw/2 - lw/2, ty + th - 32);
+            int icx = tx + tw/2, icy = ty + th/2 - 24, isz = 84;
+            if      (strstr(lbl, "View"))    ui_icons::cube (&M5.Display, icx, icy, isz, COL_TEXT);
+            else if (strstr(lbl, "Scan"))    ui_icons::radar(&M5.Display, icx, icy, isz, COL_TEXT);
+            else if (strstr(lbl, "Antenna")) ui_icons::mast (&M5.Display, icx, icy, isz, COL_TEXT);
+            else {
+                M5.Display.setTextSize(4); M5.Display.setTextColor(COL_TEXT);
+                M5.Display.setCursor(icx - 16, icy - 16);
+                M5.Display.print(_applets[i]->icon());
+            }
+
+            ui_theme::font_button(&M5.Display);
+            M5.Display.setTextColor(COL_TEXT);
+            int lw = M5.Display.textWidth(lbl);
+            M5.Display.setCursor(tx + tw/2 - lw/2, ty + th - 40);
             M5.Display.print(lbl);
         }
+        ui_theme::font_mono(&M5.Display);
     }
 
     void _draw_settings_panel() {
@@ -283,29 +368,34 @@ private:
         // Handle bar
         M5.Display.fillRoundRect(_w/2-30, _settings_y+10, 60, 6, 3, COL_HANDLE);
 
+        ui_theme::font_button(&M5.Display);
         M5.Display.setTextColor(COL_TEXT);
-        M5.Display.setTextSize(2);
-        M5.Display.setCursor(_w/2 - 52, _settings_y + 28);
+        M5.Display.setCursor(_w/2 - 60, _settings_y + 22);
         M5.Display.print("Settings");
         M5.Display.drawFastHLine(12, _settings_y+54, _w-24, COL_DIVIDER);
 
-        const char* items[] = {
-            "Display brightness",
-            "Rotation speed",
-            "Lighting preset",
-            "About M5View"
-        };
-        for (int i = 0; i < 4; i++) {
-            int iy = _settings_y + 70 + i * 60;
-            if (iy > _h - 20) break;
-            M5.Display.setTextColor(COL_SUBTEXT);
-            M5.Display.setTextSize(2);
-            M5.Display.setCursor(24, iy);
-            M5.Display.print(items[i]);
-            M5.Display.setCursor(_w - 30, iy);
-            M5.Display.print(">");
-            if (i < 3) M5.Display.drawFastHLine(12, iy+44, _w-24, 0x2945);
+        // two REAL sliders: volume + brightness (live, persisted on release)
+        struct Row { const char* label; int which; uint8_t val; };
+        Row rows[2] = { { "Volume",     1, _ui_vol },
+                        { "Brightness", 2, _ui_bright } };
+        for (int i = 0; i < 2; ++i) {
+            int x, y, w, h; _slider_rect(rows[i].which, x, y, w, h);
+            ui_theme::font_body(&M5.Display);
+            M5.Display.setTextColor(COL_TEXT);
+            M5.Display.setCursor(24, y + 8);
+            M5.Display.print(rows[i].label);
+            // track + fill + handle
+            M5.Display.fillRoundRect(x, y + h/2 - 5, w, 10, 5, 0x2945);
+            int fx = x + (int)rows[i].val * w / 255;
+            M5.Display.fillRoundRect(x, y + h/2 - 5, fx - x, 10, 5, ui_theme::ACCENT);
+            M5.Display.fillCircle(fx, y + h/2, 14, COL_TEXT);
+            // numeric readout
+            ui_theme::font_mono1(&M5.Display);
+            M5.Display.setTextColor(COL_SUBTEXT, COL_PANEL);
+            M5.Display.setCursor(x + w + 14, y + h/2 - 4);
+            M5.Display.printf("%3d", rows[i].val);
         }
+        ui_theme::font_mono(&M5.Display);
         M5.Display.endWrite();
     }
 };

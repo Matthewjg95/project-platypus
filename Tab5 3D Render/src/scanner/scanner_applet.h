@@ -18,6 +18,8 @@
 #include "room_objdb.h"
 #include "../rf_switch.h"
 #include "../ui_feedback.h"
+#include "../ui_theme.h"
+#include "../ui_icons.h"
 #include <WiFi.h>
 #include "cv/slam_pipeline.h"
 #include "cv/surface_recon.h"
@@ -264,24 +266,29 @@ private:
         int dw = M5.Display.width(), dh = M5.Display.height();
         M5.Display.startWrite();
         M5.Display.fillRect(0, BAR_H, dw, dh - BAR_H, COL_BG);
-        M5.Display.setTextColor(COL_TEXT); M5.Display.setTextSize(2);
-        M5.Display.setCursor(12, BAR_H + 10);
+        ui_theme::font_button(&M5.Display);
+        M5.Display.setTextColor(COL_TEXT);
+        M5.Display.setCursor(12, BAR_H + 12);
         M5.Display.printf("Rooms in '%s'  (%d)", _building, (int)_rooms.size());
         if (!_pipeline_ok) {
+            ui_theme::font_mono1(&M5.Display);
             M5.Display.setTextColor(TFT_RED);
-            M5.Display.setCursor(dw - 340, BAR_H + 10);
+            M5.Display.setCursor(dw - 340, BAR_H + 14);
             M5.Display.print("LOW MEMORY - scan disabled");
         }
         M5.Display.drawFastHLine(0, BAR_H + 40, dw, COL_DIVIDER);
 
         // fixed buttons: Scan new room | Live detection viewfinder
         int split = dw * 2 / 3;
-        M5.Display.fillRoundRect(12, BAR_H + 52, split - 24, 50, 6, 0x2945);
-        M5.Display.setTextColor(COL_TEXT); M5.Display.setCursor(28, BAR_H + 68);
-        M5.Display.print("+  Scan new room");
-        M5.Display.fillRoundRect(split, BAR_H + 52, dw - split - 12, 50, 6, 0x0300);
-        M5.Display.setCursor(split + 16, BAR_H + 68);
-        M5.Display.print("LIVE VIEW");
+        M5.Display.fillRoundRect(12, BAR_H + 52, split - 24, 50, 6, ui_theme::SURFACE_2);
+        ui_theme::font_button(&M5.Display);
+        M5.Display.setTextColor(COL_TEXT); M5.Display.setCursor(58, BAR_H + 64);
+        M5.Display.print("Scan new room");
+        ui_icons::radar(&M5.Display, 36, BAR_H + 77, 30, COL_TEXT);
+        M5.Display.fillRoundRect(split, BAR_H + 52, dw - split - 12, 50, 6, ui_theme::ACCENT);
+        M5.Display.setCursor(split + 48, BAR_H + 64);
+        M5.Display.print("Live view");
+        ui_icons::cube(&M5.Display, split + 28, BAR_H + 77, 26, COL_TEXT);
 
         // visible window of rooms, pixel-scrolled; clip so partial rows never
         // bleed into the header/scan-button area
@@ -289,14 +296,16 @@ private:
         M5.Display.setClipRect(0, BR_LIST_Y, dw, lh);
         int first = _scroll_px / BR_ROW_H;
         int y = BR_LIST_Y - (_scroll_px % BR_ROW_H);
+        ui_theme::font_body(&M5.Display);
         for (int idx = first; idx < (int)_rooms.size() && y < BR_LIST_Y + lh;
              ++idx, y += BR_ROW_H) {
-            M5.Display.fillRoundRect(12, y, dw - 44, 44, 6, 0x2104);
-            M5.Display.setTextColor(COL_TEXT); M5.Display.setCursor(28, y + 14);
+            M5.Display.fillRoundRect(12, y, dw - 44, 44, 6, ui_theme::SURFACE);
+            M5.Display.setTextColor(COL_TEXT); M5.Display.setCursor(28, y + 12);
             M5.Display.print(_rooms[idx].c_str());
-            M5.Display.setCursor(dw - 60, y + 14); M5.Display.print(">");
+            M5.Display.setCursor(dw - 60, y + 12); M5.Display.print(">");
         }
         M5.Display.clearClipRect();
+        ui_theme::font_mono(&M5.Display);
         // continuous scrollbar (only when the list overflows)
         int max_px = _max_scroll_px();
         if (max_px > 0) {
@@ -309,19 +318,24 @@ private:
         // delete-confirmation modal (opened by long-pressing a room row)
         if (_del_idx >= 0 && _del_idx < (int)_rooms.size()) {
             int mx = dw/2 - 220, my = dh/2 - 80;
-            M5.Display.fillRoundRect(mx, my, 440, 170, 10, 0x2104);
+            M5.Display.fillRoundRect(mx, my, 440, 170, 10, ui_theme::SURFACE);
             M5.Display.drawRoundRect(mx, my, 440, 170, 10, COL_DIVIDER);
-            M5.Display.setTextColor(COL_TEXT); M5.Display.setTextSize(2);
-            M5.Display.setCursor(mx + 20, my + 20);
+            ui_theme::font_button(&M5.Display);
+            M5.Display.setTextColor(COL_TEXT);
+            M5.Display.setCursor(mx + 66, my + 18);
             M5.Display.printf("Delete '%s'?", _rooms[_del_idx].c_str());
-            M5.Display.setTextSize(1);
-            M5.Display.setCursor(mx + 20, my + 52);
+            ui_icons::trash(&M5.Display, mx + 38, my + 32, 30, COL_TEXT);
+            ui_theme::font_mono1(&M5.Display);
+            M5.Display.setTextColor(COL_SUBTEXT);
+            M5.Display.setCursor(mx + 20, my + 60);
             M5.Display.print("Removes the mesh, labels, and RF survey.");
-            M5.Display.fillRoundRect(mx + 20, my + 90, 190, 60, 6, 0x8000);
-            M5.Display.setTextSize(2); M5.Display.setTextColor(TFT_WHITE);
-            M5.Display.setCursor(mx + 60, my + 110); M5.Display.print("DELETE");
-            M5.Display.fillRoundRect(mx + 230, my + 90, 190, 60, 6, 0x2945);
-            M5.Display.setCursor(mx + 270, my + 110); M5.Display.print("cancel");
+            ui_theme::font_button(&M5.Display);
+            M5.Display.fillRoundRect(mx + 20, my + 90, 190, 60, 6, ui_theme::DANGER);
+            M5.Display.setTextColor(TFT_WHITE);
+            M5.Display.setCursor(mx + 60, my + 106); M5.Display.print("Delete");
+            M5.Display.fillRoundRect(mx + 230, my + 90, 190, 60, 6, ui_theme::SURFACE_2);
+            M5.Display.setCursor(mx + 278, my + 106); M5.Display.print("cancel");
+            ui_theme::font_mono(&M5.Display);
         }
         M5.Display.endWrite();
         _need_redraw = false;
@@ -394,14 +408,22 @@ private:
             _need_redraw = true;                       // settle final position
             bool tap = _drag_px < 15 && (millis() - _press_ms) < 350;
             if (tap && _last_ty >= 0) {
+                int dw_ = M5.Display.width(), split_ = dw_ * 2 / 3;
                 if (_last_ty >= BAR_H + 52 && _last_ty < BAR_H + 102) {
                     ui_feedback::tick();
-                    if (_last_tx >= M5.Display.width() * 2 / 3) _enter_live();
-                    else if (_pipeline_ok) _start_scan();
+                    if (_last_tx >= split_) {
+                        ui_theme::press_flash(split_, BAR_H + 52, dw_ - split_ - 12, 50);
+                        _enter_live();
+                    } else if (_pipeline_ok) {
+                        ui_theme::press_flash(12, BAR_H + 52, split_ - 24, 50);
+                        _start_scan();
+                    }
                 } else if (_last_ty >= BR_LIST_Y) {
                     int idx = (_scroll_px + (_last_ty - BR_LIST_Y)) / BR_ROW_H;
                     if (idx >= 0 && idx < (int)_rooms.size()) {
                         ui_feedback::tick();
+                        int ry = BR_LIST_Y + idx * BR_ROW_H - _scroll_px;
+                        ui_theme::press_flash(12, ry, dw_ - 44, 44);
                         _open_room(_rooms[idx].c_str());
                     }
                 }
@@ -588,6 +610,7 @@ private:
                 int dh = M5.Display.height();
                 if (t.x >= 12 && t.x < 232 && t.y >= dh - 70 && t.y < dh - 14) {
                     ui_feedback::buzz();
+                    ui_theme::press_flash(12, dh - 70, 220, 56);
                     _finish_scan();
                     return true;
                 }
@@ -1218,6 +1241,7 @@ private:
             int by = BAR_H + 150;
             if (t.y >= by && t.y < by + 56) {          // [SAMPLE HERE]
                 if (_rf_tap_set && _rf.ssid[0]) {
+                    ui_theme::press_flash(panel_x + 10, by, dw - panel_x - 22, 56);
                     int8_t mn, mx;
                     int8_t avg = _rf_measure(mn, mx);
                     _rf_last = avg;
