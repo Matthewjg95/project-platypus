@@ -14,7 +14,7 @@ namespace ui_feedback {
 // light tap acknowledgement (2.5kHz: softer than the original 4kHz "too
 // high pitch and loud" report; loudness governed by master volume in begin)
 inline void tick() {
-    M5.Speaker.tone(2500, 15);
+    M5.Speaker.tone(2000, 15);
 }
 
 // Weighty event "thunk". HISTORY: raw-PCM playRaw was silent; explicit

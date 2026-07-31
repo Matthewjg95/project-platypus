@@ -147,7 +147,7 @@ private:
         if (!touched) {
             if (_adj) {                      // release: persist + audible preview
                 _save_ui_cfg();
-                if (_adj == 1) M5.Speaker.tone(2500, 30);
+                if (_adj == 1) M5.Speaker.tone(800, 45);   // low pip, not a squeak
                 _adj = 0;
             }
             return false;
@@ -163,11 +163,35 @@ private:
                 if (which == 1) { _ui_vol = (uint8_t)v; M5.Speaker.setVolume(_ui_vol); }
                 else { if (v < 20) v = 20; _ui_bright = (uint8_t)v;
                        M5.Display.setBrightness(_ui_bright); }
-                _settings_dirty = true;
+                // targeted row repaint — a full panel redraw per drag frame
+                // flickered and ghosted ("hazy"); the row clears itself
+                _draw_slider_row(which);
                 return true;
             }
         }
         return false;
+    }
+
+    // draw one slider row, clearing its strip first (handle overhang incl.)
+    void _draw_slider_row(int which) {
+        int x, y, w, h; _slider_rect(which, x, y, w, h);
+        M5.Display.startWrite();
+        M5.Display.fillRect(0, y - 6, _w - 12, h + 12, COL_PANEL);
+        ui_theme::font_body(&M5.Display);
+        M5.Display.setTextColor(COL_TEXT);
+        M5.Display.setCursor(24, y + 8);
+        M5.Display.print(which == 1 ? "Volume" : "Brightness");
+        uint8_t val = which == 1 ? _ui_vol : _ui_bright;
+        M5.Display.fillRoundRect(x, y + h/2 - 5, w, 10, 5, 0x2945);
+        int fx = x + (int)val * w / 255;
+        M5.Display.fillRoundRect(x, y + h/2 - 5, fx - x, 10, 5, ui_theme::ACCENT);
+        M5.Display.fillCircle(fx, y + h/2, 14, COL_TEXT);
+        ui_theme::font_mono1(&M5.Display);
+        M5.Display.setTextColor(COL_SUBTEXT, COL_PANEL);
+        M5.Display.setCursor(x + w + 14, y + h/2 - 4);
+        M5.Display.printf("%3d", val);
+        ui_theme::font_mono(&M5.Display);
+        M5.Display.endWrite();
     }
 
     // Pause/resume the active applet generically (no concrete-type knowledge).
@@ -374,28 +398,9 @@ private:
         M5.Display.print("Settings");
         M5.Display.drawFastHLine(12, _settings_y+54, _w-24, COL_DIVIDER);
 
-        // two REAL sliders: volume + brightness (live, persisted on release)
-        struct Row { const char* label; int which; uint8_t val; };
-        Row rows[2] = { { "Volume",     1, _ui_vol },
-                        { "Brightness", 2, _ui_bright } };
-        for (int i = 0; i < 2; ++i) {
-            int x, y, w, h; _slider_rect(rows[i].which, x, y, w, h);
-            ui_theme::font_body(&M5.Display);
-            M5.Display.setTextColor(COL_TEXT);
-            M5.Display.setCursor(24, y + 8);
-            M5.Display.print(rows[i].label);
-            // track + fill + handle
-            M5.Display.fillRoundRect(x, y + h/2 - 5, w, 10, 5, 0x2945);
-            int fx = x + (int)rows[i].val * w / 255;
-            M5.Display.fillRoundRect(x, y + h/2 - 5, fx - x, 10, 5, ui_theme::ACCENT);
-            M5.Display.fillCircle(fx, y + h/2, 14, COL_TEXT);
-            // numeric readout
-            ui_theme::font_mono1(&M5.Display);
-            M5.Display.setTextColor(COL_SUBTEXT, COL_PANEL);
-            M5.Display.setCursor(x + w + 14, y + h/2 - 4);
-            M5.Display.printf("%3d", rows[i].val);
-        }
-        ui_theme::font_mono(&M5.Display);
         M5.Display.endWrite();
+        // two REAL sliders: volume + brightness (live, persisted on release)
+        _draw_slider_row(1);
+        _draw_slider_row(2);
     }
 };

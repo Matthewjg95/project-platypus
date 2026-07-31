@@ -450,6 +450,17 @@ private:
     float    _bias_sum = 0; uint32_t _bias_n = 0;
     uint32_t _imu_last_ms = 0, _last_decode_ms = 0, _last_decode_seq = 0;
 
+    // ---- sweep dial: progress ring + detection pips --------------------
+    static const int RING_R0 = 215, RING_R1 = 228;
+    int _ring_deg = 0;                    // arc already drawn (degrees)
+    struct Pip { float deg; uint8_t cls; };
+    Pip _pips[64]; int _pip_n = 0;
+
+    void _ring_center(int& cx, int& cy) {
+        cx = M5.Display.width() / 2;
+        cy = BAR_H + 240;
+    }
+
     void _start_scan() { _start_scan_impl(false); }
 
     // Rescan the currently open room: new observations are registered against
@@ -478,9 +489,15 @@ private:
         M5.Display.fillRect(0, BAR_H, M5.Display.width(), M5.Display.height()-BAR_H, TFT_BLACK);
         // FINISH button (static chrome; ends the scan and builds the mesh)
         int dh = M5.Display.height();
-        M5.Display.fillRoundRect(12, dh - 70, 220, 56, 8, 0x2945);
-        M5.Display.setTextColor(COL_TEXT); M5.Display.setTextSize(2);
-        M5.Display.setCursor(40, dh - 52); M5.Display.print("FINISH SCAN");
+        M5.Display.fillRoundRect(12, dh - 70, 220, 56, 8, ui_theme::SURFACE_2);
+        ui_theme::font_button(&M5.Display);
+        M5.Display.setTextColor(COL_TEXT);
+        M5.Display.setCursor(40, dh - 56); M5.Display.print("Finish scan");
+        ui_theme::font_mono(&M5.Display);
+        // sweep-dial ring track (progress arc fills it as you rotate)
+        _ring_deg = 0; _pip_n = 0;
+        int cx, cy; _ring_center(cx, cy);
+        M5.Display.fillArc(cx, cy, RING_R0, RING_R1, 0, 360, ui_theme::SURFACE);
     }
     void _abort_scan() { _scanning = false; }
 
@@ -587,12 +604,17 @@ private:
         _det_note_frame(slot);
         _draw_dets_on_decode(slot);
 
+        int before = _acc_n;
         for (uint8_t i = 0; i < slot->det_count; ++i) {
             const Detection& d = slot->dets[i];
             if (!_depth.isKnown(d.class_id)) continue;
             ObjectEstimate e = _depth.estimate(d.class_id, d.x/2, d.w/2, d.h/2, yaw);
             if (e.valid) _acc_add(d.class_id, e);
         }
+        // dial pip for every NEWLY discovered object at the current bearing
+        float deg = fabsf(yaw) * 180.0f / (float)M_PI;
+        for (int i = before; i < _acc_n && _pip_n < 64; ++i)
+            _pips[_pip_n++] = { deg, _acc[i].cls };
     }
 
     bool _update_scan() {
@@ -666,22 +688,47 @@ private:
         // live preview: rotated push, centred near top (120x160 footprint).
         // Only when a new frame decoded — pushRotateZoom every render pass
         // starved the UART drain loop and contributed to RX overflow.
+        int cx, cy; _ring_center(cx, cy);
         if (_preview_dirty) {
             _preview_dirty = false;
-            // 2x like LIVE view — the 1x preview was a postage stamp
-            _decode->pushRotateZoom(&M5.Display, dw / 2, BAR_H + 10 + 160,
+            // 2x preview centred inside the sweep dial
+            _decode->pushRotateZoom(&M5.Display, cx, cy,
                                     PREVIEW_ROT_DEG, 2.0f, 2.0f);
         }
         uint32_t el = millis() - _scan_start;
         float deg = fabsf(_yaw_rad) * 180.0f / (float)M_PI;
+        if (deg > 360.0f) deg = 360.0f;
+
+        // incremental progress arc: 12 o'clock, clockwise, accent-filled.
+        // Drawing only the new slice avoids flicker on the ring.
+        if ((int)deg > _ring_deg) {
+            float a0 = 270.0f + _ring_deg, a1 = 270.0f + deg;
+            if (a1 <= 360.0f)
+                M5.Display.fillArc(cx, cy, RING_R0, RING_R1, a0, a1, ui_theme::ACCENT);
+            else if (a0 >= 360.0f)
+                M5.Display.fillArc(cx, cy, RING_R0, RING_R1, a0 - 360.0f, a1 - 360.0f, ui_theme::ACCENT);
+            else {
+                M5.Display.fillArc(cx, cy, RING_R0, RING_R1, a0, 360.0f, ui_theme::ACCENT);
+                M5.Display.fillArc(cx, cy, RING_R0, RING_R1, 0.0f, a1 - 360.0f, ui_theme::ACCENT);
+            }
+            _ring_deg = (int)deg;
+        }
+        // detection pips on the ring at the bearing each object was found
+        for (int i = 0; i < _pip_n; ++i) {
+            float a = (270.0f + _pips[i].deg) * (float)M_PI / 180.0f;
+            int px = cx + (int)(cosf(a) * (RING_R0 - 12));
+            int py = cy + (int)(sinf(a) * (RING_R0 - 12));
+            M5.Display.fillCircle(px, py, 6, _cls565(_pips[i].cls));
+        }
+
         int pct = (int)(100.0f * deg / 360.0f); if (pct > 100) pct = 100;
         M5.Display.setTextColor(COL_TEXT, COL_BG); M5.Display.setTextSize(2);
-        M5.Display.setCursor(12, BAR_H + 344);
+        M5.Display.setCursor(12, BAR_H + 490);
         if (el < BIAS_MS)
             M5.Display.print("Face a corner, hold still...");
         else
             M5.Display.printf("Sweep %3d\xF8 %d%% (360=done) ", (int)deg, pct);
-        M5.Display.setCursor(12, BAR_H + 374);
+        M5.Display.setCursor(12, BAR_H + 520);
         M5.Display.printf("%s objs:%d  frames:%d   ",
                           _phase2 ? "SfM" : "box", _acc_n,
                           _phase2 ? _slam.frames() : _fitter.framesProcessed());
