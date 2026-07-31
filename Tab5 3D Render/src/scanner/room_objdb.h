@@ -27,7 +27,14 @@ struct RoomObj {
     float   x, y, z;     // world, metres
     float   h;           // reference height
     uint16_t n;          // total observations across all scans
+    uint8_t flags;       // bit0 = visible in the room mesh (object on/off menu)
 };
+// Records are written raw; flags landed in what used to be tail padding, so
+// ROB1 and ROB2 files are the same 24 bytes per record (ROB1's flags byte is
+// garbage and gets forced to "visible" on load).
+static_assert(sizeof(RoomObj) == 24, "RoomObj layout changed - bump .objs magic");
+
+enum : uint8_t { ROBJ_VISIBLE = 0x01 };
 
 class RoomObjDB {
 public:
@@ -40,8 +47,12 @@ public:
 
     // Merge one observation (same rule the live accumulator uses: same class
     // within MERGE_R merges by weighted average; otherwise append).
+    // `def_flags` applies only when the observation becomes a NEW object; a
+    // merge into an existing object keeps its flags, so a user's on/off choice
+    // survives rescans that see the same object again.
     static constexpr float MERGE_R = 0.6f;
-    void merge(uint8_t cls, float x, float y, float z, float h, uint16_t n_obs = 1) {
+    void merge(uint8_t cls, float x, float y, float z, float h,
+               uint16_t n_obs = 1, uint8_t def_flags = ROBJ_VISIBLE) {
         for (int i = 0; i < count; ++i) {
             if (objs[i].cls != cls) continue;
             float dx = objs[i].x - x, dz = objs[i].z - z;
@@ -56,7 +67,7 @@ public:
             }
         }
         if (count < MAX_OBJS) objs[count++] = { cls, x, y, z, h,
-                                                (uint16_t)n_obs };
+                                                (uint16_t)n_obs, def_flags };
     }
 
     // ---- persistence: "<room>.objs" ------------------------------------
@@ -64,7 +75,7 @@ public:
         char p[208]; _path(mesh_path, p, sizeof(p));
         File f = SD_MMC.open(p, FILE_WRITE);
         if (!f) return false;
-        f.write((const uint8_t*)"ROB1", 4);
+        f.write((const uint8_t*)"ROB2", 4);
         uint16_t n = (uint16_t)count;
         f.write((const uint8_t*)&n, 2);
         for (int i = 0; i < count; ++i)
@@ -78,13 +89,19 @@ public:
         File f = SD_MMC.open(p, FILE_READ);
         if (!f) return false;
         char magic[4];
-        bool ok = f.read((uint8_t*)magic, 4) == 4 && memcmp(magic, "ROB1", 4) == 0;
+        bool v2 = false, ok = f.read((uint8_t*)magic, 4) == 4;
+        if (ok) {
+            v2 = memcmp(magic, "ROB2", 4) == 0;
+            ok = v2 || memcmp(magic, "ROB1", 4) == 0;   // legacy: pre-flags
+        }
         if (ok) {
             uint16_t n = 0; f.read((uint8_t*)&n, 2);
             if (n > MAX_OBJS) n = MAX_OBJS;
             for (uint16_t i = 0; i < n; ++i)
-                if (f.read((uint8_t*)&objs[i], sizeof(RoomObj)) == sizeof(RoomObj))
+                if (f.read((uint8_t*)&objs[i], sizeof(RoomObj)) == sizeof(RoomObj)) {
+                    if (!v2) objs[i].flags = ROBJ_VISIBLE;  // ROB1: flags byte was padding
                     count = i + 1;
+                }
         }
         f.close();
         return ok && count > 0;

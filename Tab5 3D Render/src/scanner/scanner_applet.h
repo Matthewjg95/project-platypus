@@ -93,6 +93,10 @@ public:
             _clear_content();
             return true;
         }
+        if (_state == VIEW && _obj_menu) {      // back closes the object menu,
+            _close_obj_menu();                  // applying any staged toggles
+            return true;
+        }
         if (_state == VIEW || _state == SCAN || _state == LIVE) {
             if (_scanning) _abort_scan();
             _state = BROWSE; _need_redraw = true;
@@ -194,6 +198,11 @@ private:
     // the current scan ADDS to it (rescan of an open room) or starts fresh.
     RoomObjDB _objdb;
     bool      _additive = false;
+
+    // Per-room object on/off menu (modal over VIEW). Toggles stage in RAM;
+    // closing persists flags + rebuilds the mesh.
+    bool   _obj_menu = false, _obj_menu_dirty = false, _obj_menu_changed = false;
+    int8_t _obj_rows[16]; int _obj_row_n = 0;   // db indices of listed rows
     uint8_t _gray[160*120];
 
     // ====================================================
@@ -604,9 +613,16 @@ private:
         _det_note_frame(slot);
         _draw_dets_on_decode(slot);
 
+        // CALIBRATION: accumulate ONLY detections that pass the same
+        // confident/discerning display gate (confidence floor + 2-frame
+        // persistence). Previously ANY detection with a known depth was
+        // accumulated — so one-frame ghosts that were never even shown on
+        // screen still earned map markers ("finding a little too much").
+        // Now what you see is what gets modeled.
         int before = _acc_n;
         for (uint8_t i = 0; i < slot->det_count; ++i) {
             const Detection& d = slot->dets[i];
+            if (!_det_display(d)) continue;
             if (!_depth.isKnown(d.class_id)) continue;
             ObjectEstimate e = _depth.estimate(d.class_id, d.x/2, d.w/2, d.h/2, yaw);
             if (e.valid) _acc_add(d.class_id, e);
@@ -764,7 +780,18 @@ private:
 
     // An accumulated object must be observed at least this many times to earn
     // a marker — kills one-off false positives at the low detect threshold.
+    // (First calibration knob; the second is the _det_display gate in _sample.)
     static const int MIN_OBSERVATIONS = 2;
+
+    // Default visibility for NEW objects entering the database: LAYOUT
+    // furniture (chair/table/sofa/tv) + LIVING things (person/dog/cat — the
+    // fun ones) start visible; small clutter (bottles etc.) starts hidden.
+    // The per-room OBJ menu flips flags after that, and the user's choice
+    // persists in the .objs sidecar across rescans.
+    static bool _default_visible(uint8_t c) {
+        return c == 8 || c == 10 || c == 17 || c == 19    // layout
+            || c == 14 || c == 11 || c == 7;              // person, dog, cat
+    }
 
     bool _write_phase1(const char* path) {
         // ---- resolve this scan's observations into the object database ----
@@ -780,27 +807,33 @@ private:
             for (int i = 0; i < _acc_n; ++i) {
                 float x = nw[i].x, z = nw[i].z;
                 RoomObjDB::apply(T, x, z);
-                _objdb.merge(nw[i].cls, x, nw[i].y, z, nw[i].h, nw[i].n);
+                _objdb.merge(nw[i].cls, x, nw[i].y, z, nw[i].h, nw[i].n,
+                             _default_visible(nw[i].cls) ? ROBJ_VISIBLE : 0);
             }
         } else {
             for (int i = 0; i < _acc_n; ++i)
                 _objdb.merge(_acc[i].cls, _acc[i].x, _acc[i].y, _acc[i].z,
-                             _acc[i].h, (uint16_t)_acc[i].n);
+                             _acc[i].h, (uint16_t)_acc[i].n,
+                             _default_visible(_acc[i].cls) ? ROBJ_VISIBLE : 0);
         }
+        return _rebuild_from_db(path);
+    }
 
-        // ---- geometry + labels come from the database (n-confirmed) -------
-        // Display policy: LAYOUT furniture (chair/table/sofa/tv) + LIVING
-        // things (person/dog/cat — the fun ones) render; small clutter
-        // (bottles etc.) is hidden by default until the per-room object menu
-        // exists. The floor plate sizes to contain everything DISPLAYED, so
-        // markers can never float outside the room — while hidden clutter
-        // can't stretch the layout.
-        auto show_cls = [](uint8_t c) {
-            return c == 8 || c == 10 || c == 17 || c == 19    // layout
-                || c == 14 || c == 11 || c == 7;              // person, dog, cat
+    // Build mesh + labels + sidecars from the object database alone. Called by
+    // _write_phase1 after a scan merges, and by the OBJ menu after visibility
+    // toggles (no camera frames involved — the plate footprint only ever came
+    // from object extents, so the result follows the same rule either way).
+    bool _rebuild_from_db(const char* path) {
+        auto shown = [this](const RoomObj& o) {
+            return o.n >= MIN_OBSERVATIONS && (o.flags & ROBJ_VISIBLE);
         };
+        // The floor plate sizes to contain everything DISPLAYED, so markers
+        // can never float outside the room — while hidden objects can't
+        // stretch the layout. reset() drops extents from any previous build
+        // (a just-hidden object must release its claim on the plate).
+        _fitter.reset();
         for (int i = 0; i < _objdb.count; ++i)
-            if (_objdb.objs[i].n >= MIN_OBSERVATIONS && show_cls(_objdb.objs[i].cls))
+            if (shown(_objdb.objs[i]))
                 _fitter.addObjectExtent(_objdb.objs[i].x, _objdb.objs[i].z);
         _fitter.addObjectExtent(0.0f, 0.0f);   // the plate always covers the origin
         RoomBox box = _fitter.fit();
@@ -815,7 +848,7 @@ private:
         int tn = 0;
         for (int i = 0; i < _objdb.count; ++i) {
             const RoomObj& o = _objdb.objs[i];
-            if (o.n < MIN_OBSERVATIONS || !show_cls(o.cls)) continue;
+            if (!shown(o)) continue;
             uint32_t col = object_labels::color(o.cls);
             float hy = o.h * 0.5f;
             _geom.addObjectMarker(object_labels::name(o.cls),
@@ -929,10 +962,11 @@ private:
 
     // ---- VIEW ------------------------------------------
     bool _update_view() {
+        if (_obj_menu) return _update_obj_menu();
         int n = M5.Touch.getCount();
         if (n == 1) {
             auto t = M5.Touch.getDetail(0);
-            // [RF] button hit-test on the press edge (canvas top-right)
+            // button hit-tests on the press edge (canvas top-right row)
             if (!_prev_touch) {
                 int ox = (M5.Display.width() - _cv_w) / 2;
                 int oy = (M5.Display.height() - _cv_h) / 2;
@@ -946,6 +980,12 @@ private:
                     t.y >= oy + 4 && t.y < oy + 56) {
                     ui_feedback::tick();
                     _start_rescan();
+                    return true;
+                }
+                if (t.x >= ox + _cv_w - 336 && t.x < ox + _cv_w - 228 &&
+                    t.y >= oy + 4 && t.y < oy + 56) {
+                    ui_feedback::tick();
+                    _open_obj_menu();
                     return true;
                 }
             }
@@ -970,6 +1010,10 @@ private:
 
     void _draw_view() {
         if (!_mesh_loaded) return;
+        if (_obj_menu) {                       // modal up: panel owns the screen
+            if (_obj_menu_dirty) { _draw_obj_menu(); _obj_menu_dirty = false; }
+            return;
+        }
         // map orbit angles to RenderState euler (renderer applies rx,ry,rz)
         // extract Euler from the trackball matrix (same as the Viewer applet)
         _rs.rot_x = asinf(-_rotation.m[1][2]);
@@ -1022,9 +1066,151 @@ private:
         _canvas->fillRoundRect(_cv_w - 220, 4, 108, 48, 6, 0x0300);
         _canvas->setTextSize(2);
         _canvas->setCursor(_cv_w - 208, 18); _canvas->print("SCAN+");
+        // [OBJ] button -> per-room object on/off menu
+        _canvas->fillRoundRect(_cv_w - 336, 4, 108, 48, 6, 0x2945);
+        _canvas->setCursor(_cv_w - 318, 18); _canvas->print("OBJ");
         int ox = (M5.Display.width() - _cv_w) / 2;
         int oy = (M5.Display.height() - _cv_h) / 2;
         _canvas->pushSprite(ox, oy);
+    }
+
+    // ==================== OBJECT ON/OFF MENU (VIEW modal) ================
+    // Every confirmed object in the room database gets a row: color swatch,
+    // name, observation count, ON/off pill. Tapping a row toggles it. Hidden
+    // clutter (bottles etc.) appears here too — this is where you turn it ON.
+    // Toggles stage in RAM; DONE / back persists flags to the .objs sidecar
+    // and rebuilds the mesh (plate re-fits to what is shown).
+    static const int OBJ_HDR_H = 68, OBJ_ROW_H = 54;
+
+    void _obj_menu_rect(int& px, int& py, int& pw, int& ph) const {
+        pw = 620;
+        px = (M5.Display.width() - pw) / 2;
+        py = BAR_H + 16;
+        ph = M5.Display.height() - py - 16;
+    }
+    int _obj_vis_rows(int ph) const {
+        int v = (ph - OBJ_HDR_H - 26) / OBJ_ROW_H;
+        if (v > _obj_row_n) v = _obj_row_n;
+        return v;
+    }
+
+    void _open_obj_menu() {
+        _obj_row_n = 0;
+        for (int i = 0; i < _objdb.count && _obj_row_n < 16; ++i)
+            if (_objdb.objs[i].n >= MIN_OBSERVATIONS)
+                _obj_rows[_obj_row_n++] = (int8_t)i;
+        _obj_menu = true; _obj_menu_dirty = true; _obj_menu_changed = false;
+        _clear_content();
+        _reset_touch();
+    }
+
+    void _close_obj_menu() {
+        _obj_menu = false;
+        if (_obj_menu_changed && _mesh_path[0]) {
+            ui_feedback::buzz();
+            // _rebuild_from_db persists .objs + .lbl and refreshes _labels in
+            // RAM; only the mesh itself needs reloading. Quantisation changes
+            // with the new bounds, so re-fit scale — orbit rotation is kept.
+            if (_rebuild_from_db(_mesh_path) && load_mesh(_mesh_path, _mesh))
+                _rs = fit_to_canvas(_mesh, _cv_h, 0.7f);
+        }
+        _clear_content();
+        _reset_touch();
+    }
+
+    bool _update_obj_menu() {
+        int n = M5.Touch.getCount();
+        if (n == 0) { _prev_touch = false; return true; }
+        if (_prev_touch) return true;               // press edge only
+        _prev_touch = true;
+        auto t = M5.Touch.getDetail(0);
+        int px, py, pw, ph; _obj_menu_rect(px, py, pw, ph);
+        if (t.x >= px + pw - 128 && t.x < px + pw - 16 &&
+            t.y >= py + 10 && t.y < py + 58) {      // DONE
+            ui_feedback::tick();
+            ui_theme::press_flash(px + pw - 128, py + 10, 112, 48);
+            _close_obj_menu();
+            return true;
+        }
+        int ry0 = py + OBJ_HDR_H;
+        if (t.x >= px && t.x < px + pw && t.y >= ry0) {
+            int idx = (t.y - ry0) / OBJ_ROW_H;
+            if (idx >= 0 && idx < _obj_vis_rows(ph) &&
+                (t.y - ry0) % OBJ_ROW_H < OBJ_ROW_H - 6) {
+                _objdb.objs[_obj_rows[idx]].flags ^= ROBJ_VISIBLE;
+                _obj_menu_changed = true;
+                ui_feedback::tick();
+                _draw_obj_row(idx);      // targeted repaint (no full-panel flash)
+            }
+        }
+        return true;
+    }
+
+    void _draw_obj_row(int idx) {
+        int px, py, pw, ph; _obj_menu_rect(px, py, pw, ph);
+        int y = py + OBJ_HDR_H + idx * OBJ_ROW_H;
+        const RoomObj& o = _objdb.objs[_obj_rows[idx]];
+        bool on = o.flags & ROBJ_VISIBLE;
+        M5.Display.startWrite();
+        M5.Display.fillRoundRect(px + 10, y, pw - 20, OBJ_ROW_H - 6, 6,
+                                 ui_theme::SURFACE_2);
+        M5.Display.fillRect(px + 26, y + 12, 14, 24, _cls565(o.cls));
+        ui_theme::font_body(&M5.Display);
+        M5.Display.setTextColor(on ? ui_theme::TEXT : ui_theme::SUBTEXT,
+                                ui_theme::SURFACE_2);
+        M5.Display.setCursor(px + 56, y + 14);
+        M5.Display.print(object_labels::name(o.cls));
+        ui_theme::font_mono1(&M5.Display);
+        M5.Display.setTextColor(ui_theme::SUBTEXT, ui_theme::SURFACE_2);
+        M5.Display.setCursor(px + 340, y + 20);
+        M5.Display.printf("seen x%u", (unsigned)o.n);
+        // ON/off pill
+        int bx = px + pw - 124, by = y + 8;
+        if (on) {
+            M5.Display.fillRoundRect(bx, by, 92, 34, 8, ui_theme::ACCENT);
+            ui_theme::font_body(&M5.Display);
+            M5.Display.setTextColor(ui_theme::TEXT, ui_theme::ACCENT);
+            M5.Display.setCursor(bx + 30, by + 7);
+            M5.Display.print("ON");
+        } else {
+            M5.Display.fillRoundRect(bx, by, 92, 34, 8, ui_theme::SURFACE);
+            M5.Display.drawRoundRect(bx, by, 92, 34, 8, ui_theme::DIVIDER);
+            ui_theme::font_body(&M5.Display);
+            M5.Display.setTextColor(ui_theme::SUBTEXT, ui_theme::SURFACE);
+            M5.Display.setCursor(bx + 28, by + 7);
+            M5.Display.print("off");
+        }
+        M5.Display.endWrite();
+    }
+
+    void _draw_obj_menu() {
+        int px, py, pw, ph; _obj_menu_rect(px, py, pw, ph);
+        M5.Display.startWrite();
+        M5.Display.fillRoundRect(px, py, pw, ph, 10, ui_theme::SURFACE);
+        M5.Display.drawRoundRect(px, py, pw, ph, 10, ui_theme::DIVIDER);
+        ui_theme::font_button(&M5.Display);
+        M5.Display.setTextColor(ui_theme::TEXT, ui_theme::SURFACE);
+        M5.Display.setCursor(px + 20, py + 22);
+        M5.Display.print("Room objects");
+        M5.Display.fillRoundRect(px + pw - 128, py + 10, 112, 48, 6,
+                                 ui_theme::ACCENT);
+        M5.Display.setCursor(px + pw - 112, py + 22);
+        M5.Display.print("DONE");
+        int vis = _obj_vis_rows(ph);
+        if (_obj_row_n == 0) {
+            ui_theme::font_body(&M5.Display);
+            M5.Display.setTextColor(ui_theme::SUBTEXT, ui_theme::SURFACE);
+            M5.Display.setCursor(px + 24, py + OBJ_HDR_H + 16);
+            M5.Display.print("No confirmed objects in this room yet.");
+        }
+        M5.Display.endWrite();
+        for (int i = 0; i < vis; ++i) _draw_obj_row(i);
+        if (_obj_row_n > vis) {
+            ui_theme::font_mono1(&M5.Display);
+            M5.Display.setTextColor(ui_theme::SUBTEXT, ui_theme::SURFACE);
+            M5.Display.setCursor(px + 24, py + ph - 20);
+            M5.Display.printf("+%d more (scroll coming)", _obj_row_n - vis);
+        }
     }
 
     void _open_room(const char* room) {

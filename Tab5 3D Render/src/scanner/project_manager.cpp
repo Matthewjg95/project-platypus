@@ -80,8 +80,13 @@ void ProjectManager::listRooms(const char* building, NameList& out) {
         if (!e.isDirectory()) {
             const char* nm = e.name();
             const char* base = strrchr(nm, '/'); base = base ? base + 1 : nm;
-            const char* dot = strstr(base, ".mesh");
-            size_t len = dot ? (size_t)(dot - base) : strlen(base);
+            // Rooms are .mesh files ONLY. Every room also has sidecar files
+            // (.lbl labels, .objs object DB, .rf survey) sitting in the same
+            // folder — without this suffix filter they each showed up as a
+            // phantom room and the list got cluttered fast.
+            size_t blen = strlen(base);
+            if (blen <= 5 || strcmp(base + blen - 5, ".mesh") != 0) { e.close(); continue; }
+            size_t len = blen - 5;
             if (len >= PM_MAX_NAME) len = PM_MAX_NAME - 1;
             memcpy(out.items[out.count], base, len);
             out.items[out.count][len] = '\0';
