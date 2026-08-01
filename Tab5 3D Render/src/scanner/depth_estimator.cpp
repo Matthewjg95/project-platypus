@@ -51,13 +51,39 @@ ObjectEstimate DepthEstimator::estimate(uint8_t class_id,
     e.real_height = referenceHeight(class_id);
     if (e.real_height <= 0.0f || bbox_h_px == 0) { e.valid = false; return e; }
 
+    // A box touching the left/right frame edge is truncated: its width reads
+    // short, which would range the object FARTHER than it is. Fall back to
+    // height ranging (unaffected by horizontal clipping) and skip the aspect
+    // check (the truncated aspect is meaningless).
+    bool clipped = (bbox_x <= 1) || ((int)bbox_x + (int)bbox_w >= _w - 2);
+
+    float ref_w = (class_id < 20) ? _width_table[class_id] : 0.0f;
+    bool  use_w = ref_w > 0.0f && bbox_w > 0 && !clipped;
+
+    // Tiny boxes: at MIN_BOX_PX the per-pixel quantisation error alone is
+    // >10% of the range — anything smaller is noise, not measurement.
+    if ((use_w ? bbox_w : bbox_h_px) < MIN_BOX_PX) { e.valid = false; return e; }
+
+    // Aspect sanity for classes with both size references: a "sofa" box
+    // taller than it is wide is a bad detection or a heavy occlusion, and
+    // ranging off either dimension of it produces garbage.
+    if (ref_w > 0.0f && !clipped) {
+        float expect = ref_w / e.real_height;
+        float got    = (float)bbox_w / (float)bbox_h_px;
+        float r      = got / expect;
+        if (r > ASPECT_TOL || r < 1.0f / ASPECT_TOL) { e.valid = false; return e; }
+    }
+
     // wide-furniture classes range by WIDTH (the stabler scale cue);
     // everything else by height
-    float ref_w = (class_id < 20) ? _width_table[class_id] : 0.0f;
-    if (ref_w > 0.0f && bbox_w > 0)
+    if (use_w)
         e.distance = (ref_w * _focal_px) / (float)bbox_w;
     else
         e.distance = (e.real_height * _focal_px) / (float)bbox_h_px;
+
+    // Indoor scans: a range beyond MAX_RANGE_M is a mis-sized box, not a
+    // 12-metre living room.
+    if (e.distance > MAX_RANGE_M) { e.valid = false; return e; }
 
     // Horizontal angle of the bbox centre off the optical axis.
     float cx = (float)bbox_x + (float)bbox_w * 0.5f;

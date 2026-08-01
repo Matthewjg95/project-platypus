@@ -191,8 +191,26 @@ private:
     char     _scan_room[48] = {0};
     static const uint32_t SCAN_MS = 20000, SAMPLE_MS = 1000;
 
-    struct AccObj { uint8_t cls; float x,y,z,h; int n; };
+    // Per-object sample history for MEDIAN positioning: a running mean let a
+    // single bad range (occlusion, mis-box) drag a marker across the room;
+    // the component-wise median of the first MED_N samples shrugs it off.
+    // n keeps counting past MED_N for MIN_OBSERVATIONS / db weighting.
+    static const int MED_N = 9;
+    struct AccObj { uint8_t cls; float x,y,z,h; int n;
+                    float sx[MED_N], sy[MED_N], sz[MED_N], sh[MED_N];
+                    uint8_t sn; };
     AccObj _acc[64]; int _acc_n = 0;
+
+    static float _median(const float* v, int n) {
+        float t[MED_N];
+        for (int i = 0; i < n; ++i) t[i] = v[i];
+        for (int i = 1; i < n; ++i) {              // insertion sort: n <= 9
+            float k = t[i]; int j = i - 1;
+            while (j >= 0 && t[j] > k) { t[j+1] = t[j]; --j; }
+            t[j+1] = k;
+        }
+        return t[n / 2];
+    }
 
     // Additive scanning: the room's persistent object database, and whether
     // the current scan ADDS to it (rescan of an open room) or starts fresh.
@@ -546,13 +564,26 @@ private:
             if (_acc[i].cls == cls) {
                 float dx=_acc[i].x-e.x, dz=_acc[i].z-e.z;
                 if (dx*dx+dz*dz <= 0.36f) {
-                    int n=_acc[i].n;
-                    _acc[i].x=(_acc[i].x*n+e.x)/(n+1); _acc[i].y=(_acc[i].y*n+e.y)/(n+1);
-                    _acc[i].z=(_acc[i].z*n+e.z)/(n+1); _acc[i].h=(_acc[i].h*n+e.real_height)/(n+1);
-                    _acc[i].n=n+1; return;
+                    AccObj& a = _acc[i];
+                    if (a.sn < MED_N) {
+                        a.sx[a.sn]=e.x; a.sy[a.sn]=e.y;
+                        a.sz[a.sn]=e.z; a.sh[a.sn]=e.real_height;
+                        ++a.sn;
+                        a.x=_median(a.sx,a.sn); a.y=_median(a.sy,a.sn);
+                        a.z=_median(a.sz,a.sn); a.h=_median(a.sh,a.sn);
+                    }
+                    a.n++;
+                    return;
                 }
             }
-        if (_acc_n < 64) _acc[_acc_n++] = { cls, e.x, e.y, e.z, e.real_height, 1 };
+        if (_acc_n < 64) {
+            AccObj& a = _acc[_acc_n++];
+            a = {};
+            a.cls = cls; a.x = e.x; a.y = e.y; a.z = e.z; a.h = e.real_height;
+            a.n = 1;
+            a.sx[0]=e.x; a.sy[0]=e.y; a.sz[0]=e.z; a.sh[0]=e.real_height;
+            a.sn = 1;
+        }
     }
 
     bool _preview_dirty = false;   // push the rotated preview only when it changed

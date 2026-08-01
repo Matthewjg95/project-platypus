@@ -44,6 +44,11 @@ public:
 
     float focalPx() const { return _focal_px; }
 
+    // ---- sanity gates (see estimate() for rationale) --------------------
+    static const int       MIN_BOX_PX  = 8;      // in the downscaled frame
+    static constexpr float ASPECT_TOL  = 1.8f;   // allowed w/h deviation factor
+    static constexpr float MAX_RANGE_M = 8.0f;   // indoor plausibility ceiling
+
 private:
     int   _w, _h;
     float _focal_px;
