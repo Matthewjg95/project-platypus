@@ -621,6 +621,13 @@ private:
     // inference (~300ms persistence) — kills one-frame flicker.
     static const uint8_t DISPLAY_CONF = 22;
     static const uint8_t ACC_CONF     = 18;   // map accumulation floor (see _sample)
+
+    // Per-class strictness: VOC "person" is the model's most trigger-happy
+    // class (a live scan mapped half a room as people). It has to clear a
+    // higher confidence bar AND more sightings than furniture does.
+    static uint8_t _acc_conf(uint8_t cls) { return cls == 14 ? 25 : ACC_CONF; }
+    static int     _min_obs(uint8_t cls)  { return cls == 14 ? 4
+                                                             : MIN_OBSERVATIONS; }
     uint32_t _seen_prev = 0, _seen_cur = 0, _seen_seq = 0;
 
     void _det_note_frame(const FrameSlot* s) {
@@ -690,7 +697,7 @@ private:
         int before = _acc_n;
         for (uint8_t i = 0; i < slot->det_count; ++i) {
             const Detection& d = slot->dets[i];
-            if (d.confidence < ACC_CONF) continue;
+            if (d.confidence < _acc_conf(d.class_id)) continue;
             if (!_depth.isKnown(d.class_id)) continue;
             ObjectEstimate e = _depth.estimate(d.class_id, d.x/2, d.w/2, d.h/2, yaw);
             if (e.valid) _acc_add(d.class_id, e);
@@ -892,23 +899,75 @@ private:
     // toggles (no camera frames involved — the plate footprint only ever came
     // from object extents, so the result follows the same rule either way).
     bool _rebuild_from_db(const char* path) {
-        auto shown = [this](const RoomObj& o) {
-            return o.n >= MIN_OBSERVATIONS && (o.flags & ROBJ_VISIBLE);
+        auto shown = [](const RoomObj& o) {
+            return o.n >= _min_obs(o.cls) && (o.flags & ROBJ_VISIBLE);
         };
-        // The floor plate sizes to contain everything DISPLAYED, so markers
-        // can never float outside the room — while hidden objects can't
-        // stretch the layout. reset() drops extents from any previous build
-        // (a just-hidden object must release its claim on the plate).
-        _fitter.reset();
-        for (int i = 0; i < _objdb.count; ++i)
-            if (shown(_objdb.objs[i]))
-                _fitter.addObjectExtent(_objdb.objs[i].x, _objdb.objs[i].z);
-        _fitter.addObjectExtent(0.0f, 0.0f);   // the plate always covers the origin
-        RoomBox box = _fitter.fit();
+        // ---- visibility-carved floor -----------------------------------
+        // Non-rectangular rooms from camera-only evidence: every displayed
+        // object was SEEN from the origin, so the sight-line between them is
+        // open floor. Stamp the origin, each object, and each sight-line
+        // corridor into a coarse occupancy grid; the union of stamped cells
+        // becomes the floor. L-shapes and extensions emerge naturally — an
+        // object down a hallway pulls a corridor of floor with it instead of
+        // inflating one bounding rectangle. Hidden objects stamp nothing, so
+        // clutter can't stretch the layout. (Walls stay Phase-2/ToF work.)
+        static const float CELL   = 0.25f;   // grid resolution, metres
+        static const int   GN     = 64;      // grid span: 16m per axis
+        static const float R_ORG  = 0.9f;    // open floor where you stood
+        static const float R_OBJ  = 0.7f;    // open floor around an object
+        static const float R_LOS  = 0.45f;   // sight-line corridor half-width
+        static uint8_t occ[GN * GN];
+        memset(occ, 0, sizeof(occ));
+        float minx = -1.2f, maxx = 1.2f, minz = -1.2f, maxz = 1.2f;
+        for (int i = 0; i < _objdb.count; ++i) {
+            const RoomObj& o = _objdb.objs[i];
+            if (!shown(o)) continue;
+            if (o.x - 1.0f < minx) minx = o.x - 1.0f;
+            if (o.x + 1.0f > maxx) maxx = o.x + 1.0f;
+            if (o.z - 1.0f < minz) minz = o.z - 1.0f;
+            if (o.z + 1.0f > maxz) maxz = o.z + 1.0f;
+        }
+        int nx = (int)((maxx - minx) / CELL) + 1; if (nx > GN) nx = GN;
+        int nz = (int)((maxz - minz) / CELL) + 1; if (nz > GN) nz = GN;
+        auto stamp = [&](float sx, float sz, float r) {
+            int x0 = (int)((sx - r - minx) / CELL), x1 = (int)((sx + r - minx) / CELL);
+            int z0 = (int)((sz - r - minz) / CELL), z1 = (int)((sz + r - minz) / CELL);
+            for (int gz = z0 < 0 ? 0 : z0; gz <= z1 && gz < nz; ++gz)
+                for (int gx = x0 < 0 ? 0 : x0; gx <= x1 && gx < nx; ++gx) {
+                    float dx = minx + (gx + 0.5f) * CELL - sx;
+                    float dz = minz + (gz + 0.5f) * CELL - sz;
+                    if (dx*dx + dz*dz <= r*r) occ[gz * GN + gx] = 1;
+                }
+        };
+        stamp(0.0f, 0.0f, R_ORG);
+        for (int i = 0; i < _objdb.count; ++i) {
+            const RoomObj& o = _objdb.objs[i];
+            if (!shown(o)) continue;
+            stamp(o.x, o.z, R_OBJ);
+            float d = sqrtf(o.x*o.x + o.z*o.z);
+            int steps = (int)(d / CELL) + 1;
+            for (int s = 1; s < steps; ++s) {
+                float t = (float)s / (float)steps;
+                stamp(o.x * t, o.z * t, R_LOS);
+            }
+        }
         _geom.reset();
-        // Floor plate only — no presumptive walls/ceiling (we can't localize
-        // walls monocularly; Phase 2 will place evidence-based thin walls).
-        _geom.addFloorPlate(box.cx, box.cz, box.width, box.depth);
+        // one thin slab per horizontal run of occupied cells (run-merging
+        // keeps the triangle count to a few dozen slabs, not per-cell)
+        for (int gz = 0; gz < nz; ++gz) {
+            int run = -1;
+            for (int gx = 0; gx <= nx; ++gx) {
+                bool on = gx < nx && occ[gz * GN + gx];
+                if (on && run < 0) run = gx;
+                else if (!on && run >= 0) {
+                    float w   = (gx - run) * CELL;
+                    float cxr = minx + run * CELL + w * 0.5f;
+                    float czr = minz + (gz + 0.5f) * CELL;
+                    _geom.addFloorPlate(cxr, czr, w, CELL);
+                    run = -1;
+                }
+            }
+        }
         _geom.addOriginArrow();                // where the (first) scan began
 
         struct LblTmp { float x, y, z; uint8_t cls; };
@@ -1165,7 +1224,7 @@ private:
     void _open_obj_menu() {
         _obj_row_n = 0;
         for (int i = 0; i < _objdb.count && _obj_row_n < 16; ++i)
-            if (_objdb.objs[i].n >= MIN_OBSERVATIONS)
+            if (_objdb.objs[i].n >= _min_obs(_objdb.objs[i].cls))
                 _obj_rows[_obj_row_n++] = (int8_t)i;
         _obj_menu = true; _obj_menu_dirty = true; _obj_menu_changed = false;
         _clear_content();

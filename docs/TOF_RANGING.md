@@ -1,5 +1,10 @@
 # ToF Wall Ranging — Research & Integration Plan
 
+> **STATUS (2026-08-01): post-contest revision.** ToF hardware + custom
+> enclosure are roadmapped for after the Aug 7 contest deadline. Until then
+> the camera-only path carries layout: visibility-carved floors (occupancy
+> union of origin + objects + sight-lines) replaced the rectangular plate.
+
 **Goal:** during the same 360° sweep-dial scan, sample a real distance at every
 bearing → the scan produces the room's **actual measured wall outline** (a polar
 polygon) instead of a bounding plate inferred from object extents. Objects from
