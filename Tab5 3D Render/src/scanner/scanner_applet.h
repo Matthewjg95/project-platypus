@@ -474,12 +474,18 @@ private:
     // which integrated into phantom sweep progress. Real yaw sweeps run tens
     // of deg/s; anything under this floor is treated as stillness.
     static constexpr float    YAW_DEADBAND_DPS = 2.0f;
+    // Bias must come from a genuinely STILL window. The rate spread within the
+    // calibration window must stay under this; any disturbance restarts it.
+    static constexpr float    BIAS_STILL_DPS = 3.0f;
     static const     uint32_t PREVIEW_MS = 400;   // live preview decode cadence
     // No scan timeout: a scan runs until a measured 360-degree sweep or the
     // on-screen FINISH button. (Shell back = abort without saving.)
 
     float    _yaw_rad = 0, _yaw_bias_dps = 0;
     float    _bias_sum = 0; uint32_t _bias_n = 0;
+    float    _bias_min = 0, _bias_max = 0;
+    uint32_t _bias_t0 = 0;
+    bool     _bias_locked = false;
     uint32_t _imu_last_ms = 0, _last_decode_ms = 0, _last_decode_seq = 0;
 
     // ---- sweep dial: progress ring + detection pips --------------------
@@ -514,6 +520,8 @@ private:
         _fb.invalidateAll();          // never sample a previous scan's frame
         _scanning = true; _scan_start = millis(); _last_sample = 0; _last_seq = 0;
         _yaw_rad = 0; _yaw_bias_dps = 0; _bias_sum = 0; _bias_n = 0;
+        _bias_min = 1e9f; _bias_max = -1e9f; _bias_t0 = millis();
+        _bias_locked = false;
         _imu_last_ms = millis(); _last_decode_ms = 0; _last_decode_seq = 0;
         _state = SCAN;
         _reset_touch();
@@ -545,13 +553,32 @@ private:
     }
 
     void _imu_tick(uint32_t now, uint32_t el) {
+        (void)el;
         float dt = (now - _imu_last_ms) * 0.001f;
         _imu_last_ms = now;
         if (dt <= 0 || dt > 0.25f) return;            // skip stalls/jumps
         float rate = _yaw_rate_dps();
-        if (el < BIAS_MS) {                            // hold-still calibration
+        if (!_bias_locked) {
+            // Stillness-locked calibration. The old version averaged whatever
+            // happened in the first 900ms — start turning early and that
+            // motion became "zero", so the ring ran on its own for the whole
+            // scan (the "sweep went waaaay too fast" bug). Now any
+            // disturbance restarts the window; integration begins only after
+            // a genuinely still BIAS_MS.
+            if (rate < _bias_min) _bias_min = rate;
+            if (rate > _bias_max) _bias_max = rate;
             _bias_sum += rate; _bias_n++;
-            if (_bias_n) _yaw_bias_dps = _bias_sum / _bias_n;
+            if (_bias_max - _bias_min > BIAS_STILL_DPS) {   // moving: restart
+                _bias_sum = 0; _bias_n = 0;
+                _bias_min = 1e9f; _bias_max = -1e9f;
+                _bias_t0 = now;
+                return;
+            }
+            if (now - _bias_t0 >= BIAS_MS && _bias_n > 0) {
+                _yaw_bias_dps = _bias_sum / _bias_n;
+                _bias_locked = true;
+                ui_feedback::tick();          // audible GO — start sweeping
+            }
             return;
         }
         float r = rate - _yaw_bias_dps;
@@ -593,6 +620,7 @@ private:
     // confidence floor AND its class was also present in the previous
     // inference (~300ms persistence) — kills one-frame flicker.
     static const uint8_t DISPLAY_CONF = 22;
+    static const uint8_t ACC_CONF     = 18;   // map accumulation floor (see _sample)
     uint32_t _seen_prev = 0, _seen_cur = 0, _seen_seq = 0;
 
     void _det_note_frame(const FrameSlot* s) {
@@ -651,16 +679,18 @@ private:
         _det_note_frame(slot);
         _draw_dets_on_decode(slot);
 
-        // CALIBRATION: accumulate ONLY detections that pass the same
-        // confident/discerning display gate (confidence floor + 2-frame
-        // persistence). Previously ANY detection with a known depth was
-        // accumulated — so one-frame ghosts that were never even shown on
-        // screen still earned map markers ("finding a little too much").
-        // Now what you see is what gets modeled.
+        // CALIBRATION: a confidence floor for the map, WITHOUT the display
+        // path's 2-frame class persistence. Lesson from a live test: this
+        // model scores 16-27% and detect frames arrive ~2/s while panning,
+        // so requiring consecutive-frame agreement produced EMPTY scans.
+        // The map has its own confirmation mechanism — MIN_OBSERVATIONS
+        // demands 2+ sightings within the same 0.6m cell — which is the
+        // right kind of evidence (spatial, not temporal). Display keeps the
+        // stricter gate for flicker-free boxes.
         int before = _acc_n;
         for (uint8_t i = 0; i < slot->det_count; ++i) {
             const Detection& d = slot->dets[i];
-            if (!_det_display(d)) continue;
+            if (d.confidence < ACC_CONF) continue;
             if (!_depth.isKnown(d.class_id)) continue;
             ObjectEstimate e = _depth.estimate(d.class_id, d.x/2, d.w/2, d.h/2, yaw);
             if (e.valid) _acc_add(d.class_id, e);
@@ -778,8 +808,8 @@ private:
         int pct = (int)(100.0f * deg / 360.0f); if (pct > 100) pct = 100;
         M5.Display.setTextColor(COL_TEXT, COL_BG); M5.Display.setTextSize(2);
         M5.Display.setCursor(12, BAR_H + 490);
-        if (el < BIAS_MS)
-            M5.Display.print("Face a corner, hold still...");
+        if (!_bias_locked)
+            M5.Display.print("Face a corner, hold still...  ");
         else
             M5.Display.printf("Sweep %3d\xF8 %d%% (360=done) ", (int)deg, pct);
         M5.Display.setCursor(12, BAR_H + 520);
