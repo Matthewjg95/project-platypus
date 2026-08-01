@@ -451,6 +451,11 @@ private:
     // source. Flip YAW_SIGN to -1 if scanned rooms come out mirrored.
     static constexpr float    YAW_SIGN   = 1.0f;
     static const     uint32_t BIAS_MS    = 900;   // hold-still gyro bias window
+    // Pitching the camera up/down contaminates the gravity-projected rate
+    // with small noise (accel measures gravity + hand motion during the tilt)
+    // which integrated into phantom sweep progress. Real yaw sweeps run tens
+    // of deg/s; anything under this floor is treated as stillness.
+    static constexpr float    YAW_DEADBAND_DPS = 2.0f;
     static const     uint32_t PREVIEW_MS = 400;   // live preview decode cadence
     // No scan timeout: a scan runs until a measured 360-degree sweep or the
     // on-screen FINISH button. (Shell back = abort without saving.)
@@ -531,7 +536,9 @@ private:
             if (_bias_n) _yaw_bias_dps = _bias_sum / _bias_n;
             return;
         }
-        _yaw_rad += YAW_SIGN * (rate - _yaw_bias_dps) * (float)M_PI / 180.0f * dt;
+        float r = rate - _yaw_bias_dps;
+        if (fabsf(r) < YAW_DEADBAND_DPS) return;       // pitch/jitter, not sweep
+        _yaw_rad += YAW_SIGN * r * (float)M_PI / 180.0f * dt;
     }
 
     void _acc_add(uint8_t cls, const ObjectEstimate& e) {
