@@ -96,7 +96,7 @@ isolated in `src/scanner/tof_ranger.h`.
 ## Enclosure (next phase)
 
 Once camera + ToF + Tab5 travel together, a 3D-printed bracket becomes the
-right move (ShadowScan already proves the STL pipeline in-house):
+right move:
 
 - **Rigid co-aim is the whole game:** ToF and camera optical axes parallel,
   both normal to the Tab5 back. A fixed yaw offset between them is fine —

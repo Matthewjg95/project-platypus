@@ -2025,6 +2025,30 @@ private:
         M5.Display.setCursor(px + 12, by + 132);
         M5.Display.printf("HEAT %s", _rf_heat ? "ON " : "OFF");
 
+        // ---- signal legend -------------------------------------------------
+        // Without this the heatmap is just pretty colours to anyone who didn't
+        // build it. Judges (and users) need to READ it at a glance.
+        int ly = by + 180;
+        M5.Display.setTextSize(1);
+        M5.Display.setTextColor(COL_TEXT, COL_BG);
+        M5.Display.setCursor(px, ly);
+        M5.Display.print("SIGNAL STRENGTH");
+        const struct { uint16_t c; const char* t; } leg[4] = {
+            { 0x07E0, "-55+  strong" }, { 0xFFE0, "-70   ok" },
+            { 0xFC00, "-80   weak" },   { 0xF800, "<-80  dead" }
+        };
+        for (int i = 0; i < 4; ++i) {
+            int y = ly + 16 + i * 18;
+            M5.Display.fillRect(px, y, 26, 12, leg[i].c);
+            M5.Display.drawRect(px, y, 26, 12, COL_DIVIDER);
+            M5.Display.setTextColor(COL_SUBTEXT, COL_BG);
+            M5.Display.setCursor(px + 34, y + 2);
+            M5.Display.print(leg[i].t);
+        }
+        M5.Display.setTextColor(COL_SUBTEXT, COL_BG);
+        M5.Display.setCursor(px, ly + 92);
+        M5.Display.print("dBm at 2.4GHz");
+
         M5.Display.setTextSize(1); M5.Display.setTextColor(COL_SUBTEXT, COL_BG);
         M5.Display.setCursor(px, dh - 40);
         M5.Display.print("tap plan = your position");

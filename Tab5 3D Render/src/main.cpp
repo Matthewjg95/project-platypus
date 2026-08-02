@@ -25,7 +25,6 @@
 #include "viewer_applet.h"
 #include "scanner/scanner_applet.h"
 #include "antenna/antenna_applet.h"
-#include "shadowscan/shadowscan_applet.h"
 #include "wifi_creds.h"          // gitignored: OTA_WIFI_SSID/PASS/HOSTNAME
 #include "ui_feedback.h"
 #include "ui_icons.h"
@@ -37,16 +36,43 @@ SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 
 static Shell shell;
 
+// Boot splash. Drawn BEFORE the SD mount and applet construction so it fills
+// startup time that already existed rather than adding any — the shell paints
+// over it when it's ready. First frame the judges (and the demo video) see.
+static void boot_splash() {
+    int w = M5.Display.width(), h = M5.Display.height();
+    M5.Display.fillScreen(COL_BG);
+    ui_icons::radar(&M5.Display, w / 2, h / 2 - 96, 120, ui_theme::ACCENT);
+    ui_theme::font_title(&M5.Display);
+    M5.Display.setTextColor(ui_theme::TEXT, COL_BG);
+    const char* t1 = "PROJECT PLATYPUS";
+    M5.Display.setCursor(w / 2 - M5.Display.textWidth(t1) / 2, h / 2 + 10);
+    M5.Display.print(t1);
+    ui_theme::font_button(&M5.Display);
+    M5.Display.setTextColor(ui_theme::ACCENT, COL_BG);
+    const char* t2 = "Room Scanner  +  RF Survey";
+    M5.Display.setCursor(w / 2 - M5.Display.textWidth(t2) / 2, h / 2 + 60);
+    M5.Display.print(t2);
+    ui_theme::font_mono1(&M5.Display);
+    M5.Display.setTextColor(ui_theme::SUBTEXT, COL_BG);
+    const char* t3 = "M5Stack Tab5 - ESP32-P4 - Unit V K210";
+    M5.Display.setCursor(w / 2 - strlen(t3) * 3, h - 60);
+    M5.Display.print(t3);
+}
+
 void setup() {
     Serial.begin(115200);
-    uint32_t t = millis();
-    while (!Serial && (millis() - t) < 3000) delay(10);
+    // Brief settle only. This used to block up to 3s waiting for a USB host —
+    // on battery that was 3 dead seconds on every power-on, in the demo.
+    delay(300);
     Serial.println("\n=== M5View booting ===");
 
     auto cfg = M5.config();
     M5.begin(cfg);
     M5.Display.setRotation(1);
     M5.Display.fillScreen(TFT_BLACK);
+    boot_splash();
+    uint32_t splash_ms = millis();
 
     Serial.printf("Display: %dx%d\n",
                   M5.Display.width(), M5.Display.height());
@@ -69,11 +95,13 @@ void setup() {
     shell.register_applet(new ViewerApplet());
     shell.register_applet(new ScannerApplet());
     shell.register_applet(new AntennaApplet());
-    shell.register_applet(new ShadowScanApplet());
     // Future applets go here:
     // shell.register_applet(new NotesApplet());
 
     ui_feedback::begin();        // speaker up + boot beep (default volume)
+    // Hold the splash to a legible minimum; SD mount + applet construction
+    // above have usually eaten most of this already.
+    while (millis() - splash_ms < 1100) delay(20);
     shell.begin(M5.Display.width(), M5.Display.height());   // applies saved volume/brightness
     Serial.println("M5View ready");
 }
