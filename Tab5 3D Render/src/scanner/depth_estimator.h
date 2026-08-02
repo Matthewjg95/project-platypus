@@ -46,7 +46,11 @@ public:
 
     // ---- sanity gates (see estimate() for rationale) --------------------
     static const int       MIN_BOX_PX  = 8;      // in the downscaled frame
-    static constexpr float ASPECT_TOL  = 1.8f;   // allowed w/h deviation factor
+    // Allowed w/h deviation factor from the class's expected aspect. 1.8 was
+    // too tight for furniture seen off-axis (a sofa at 45deg reads ~half its
+    // frontal aspect) and cost sweeps real objects; 2.2 keeps the garbage
+    // gate (sideways/occluded nonsense) without taxing viewing angle.
+    static constexpr float ASPECT_TOL  = 2.2f;   // allowed w/h deviation factor
     static constexpr float MAX_RANGE_M = 8.0f;   // indoor plausibility ceiling
 
 private:

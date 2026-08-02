@@ -152,7 +152,22 @@ static PtOtaState ota_state = PT_OTA_IDLE;
 static uint32_t ota_join_start = 0;
 
 static void ota_tick(bool at_home) {
-    if (!at_home) return;              // applets own the radio; just don't handle()
+    // Leaving home: applets own the radio. Dropping our STA association here
+    // matters — the antenna suite's scans/RSSI scope fought the live OTA
+    // connection ("OTA gets in the way on Antenna" field report). The
+    // association is cheap to re-establish; ArduinoOTA itself is never
+    // re-begun (hard-learned begin-once rule).
+    static bool was_home = true;
+    if (!at_home) {
+        if (was_home && (ota_state == PT_OTA_JOINING || ota_state == PT_OTA_READY)) {
+            WiFi.disconnect();
+            ota_state = PT_OTA_SUSPENDED;
+            Serial.println("[ota] suspended: applet owns the radio");
+        }
+        was_home = false;
+        return;
+    }
+    was_home = true;
     switch (ota_state) {
     case PT_OTA_IDLE:
         WiFi.setPins(12, 13, 11, 10, 9, 8, 15);   // M5Tab5 C6 hosted-SDIO
@@ -185,7 +200,13 @@ static void ota_tick(bool at_home) {
         ArduinoOTA.handle();
         break;
     case PT_OTA_SUSPENDED:
+        // Back at home: quietly re-associate until the link returns, then
+        // resume handling with the ORIGINAL ArduinoOTA instance.
         if (WiFi.status() == WL_CONNECTED) ota_state = PT_OTA_READY;
+        else if (millis() - ota_join_start > 8000) {
+            ota_join_start = millis();
+            WiFi.begin(OTA_WIFI_SSID, OTA_WIFI_PASS);
+        }
         break;
     }
 }

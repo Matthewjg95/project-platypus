@@ -685,10 +685,15 @@ private:
     }
 
     void _acc_add(uint8_t cls, const ObjectEstimate& e) {
+        // Walk mode merges wider: dead-reckoning drift spreads repeat
+        // sightings of the SAME object past the sweep radius, fragmenting
+        // them into 1-observation entries that never reach MIN_OBSERVATIONS
+        // ("walk finds fewer objects" field report).
+        float r2 = _walk ? 1.21f : 0.36f;    // 1.1m vs 0.6m radius
         for (int i = 0; i < _acc_n; ++i)
             if (_acc[i].cls == cls) {
                 float dx=_acc[i].x-e.x, dz=_acc[i].z-e.z;
-                if (dx*dx+dz*dz <= 0.36f) {
+                if (dx*dx+dz*dz <= r2) {
                     AccObj& a = _acc[i];
                     if (a.sn < MED_N) {
                         a.sx[a.sn]=e.x; a.sy[a.sn]=e.y;
@@ -718,7 +723,12 @@ private:
     // confidence floor AND its class was also present in the previous
     // inference (~300ms persistence) — kills one-frame flicker.
     static const uint8_t DISPLAY_CONF = 22;
-    static const uint8_t ACC_CONF     = 18;   // map accumulation floor (see _sample)
+    // Map accumulation floor. CALIBRATION HISTORY on this 16-27% model:
+    // no floor = phantom clutter; 22+persistence = empty scans; 18 = sweeps
+    // missing real furniture. 16 admits nearly everything the camera reports
+    // — the real vetting is spatial (MIN_OBSERVATIONS same-cell sightings),
+    // positional (median-of-9), and the box sanity gates in the estimator.
+    static const uint8_t ACC_CONF     = 16;
 
     // Per-class strictness: VOC "person" is the model's most trigger-happy
     // class (a live scan mapped half a room as people). It has to clear a
@@ -849,7 +859,10 @@ private:
             }
         }
 
-        if (now - _last_sample >= SAMPLE_MS) {
+        // Walking passes objects quickly — sample faster so each one gets
+        // enough sightings to clear MIN_OBSERVATIONS before it leaves view.
+        uint32_t smp_ms = _walk ? 600 : SAMPLE_MS;
+        if (now - _last_sample >= smp_ms) {
             const FrameSlot* s = _fb.latest();
             // scan-path diagnostic: log the gate decision at most once/sec
             static uint32_t _g = 0;
