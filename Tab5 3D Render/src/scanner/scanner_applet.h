@@ -108,7 +108,18 @@ public:
 
     // Settings opened over us: stop drawing so we don't overwrite the panel.
     void on_pause()  override { _paused = true; }
-    void on_resume() override { _paused = false; _need_redraw = true; }
+    // Panel closed: it overdrew our content area, so repair the current
+    // state's screen (ghost panel pixels persist outside whatever region the
+    // state normally repaints — the "Settings lag thing" screenshot).
+    void on_resume() override {
+        _paused = false; _need_redraw = true; _rf_redraw = true;
+        switch (_state) {
+            case VIEW: _clear_content();    break;  // canvas repaints itself
+            case LIVE: _enter_live();       break;  // re-clears + reprints hint
+            case SCAN: _draw_scan_chrome(); break;  // FINISH + ring + preview
+            default:   break;               // BROWSE/SURVEY full-redraw flags
+        }
+    }
 
     bool on_update() override {
         _uart.update();                         // drain Unit V stream
@@ -526,18 +537,26 @@ private:
         _state = SCAN;
         _reset_touch();
         _decode->fillSprite(TFT_BLACK);   // blank until the first frame decodes
-        M5.Display.fillRect(0, BAR_H, M5.Display.width(), M5.Display.height()-BAR_H, TFT_BLACK);
-        // FINISH button (static chrome; ends the scan and builds the mesh)
+        _pip_n = 0;
+        _draw_scan_chrome();
+    }
+
+    // Static SCAN chrome: content blank, FINISH button, sweep-dial track.
+    // Called at scan start AND from on_resume (Settings overdrew the screen).
+    // Resets _ring_deg/_preview_dirty so the arc and preview repaint fully.
+    void _draw_scan_chrome() {
+        M5.Display.fillRect(0, BAR_H, M5.Display.width(),
+                            M5.Display.height() - BAR_H, TFT_BLACK);
         int dh = M5.Display.height();
         M5.Display.fillRoundRect(12, dh - 70, 220, 56, 8, ui_theme::SURFACE_2);
         ui_theme::font_button(&M5.Display);
         M5.Display.setTextColor(COL_TEXT);
         M5.Display.setCursor(40, dh - 56); M5.Display.print("Finish scan");
         ui_theme::font_mono(&M5.Display);
-        // sweep-dial ring track (progress arc fills it as you rotate)
-        _ring_deg = 0; _pip_n = 0;
         int cx, cy; _ring_center(cx, cy);
         M5.Display.fillArc(cx, cy, RING_R0, RING_R1, 0, 360, ui_theme::SURFACE);
+        _ring_deg = 0;             // progress arc redraws from zero next frame
+        _preview_dirty = true;     // preview re-pushes next decode/frame
     }
     void _abort_scan() { _scanning = false; }
 

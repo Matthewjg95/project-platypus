@@ -38,17 +38,9 @@ public:
     void update() {
         M5.update();
         _handle_touch();
-
-        // Animate settings panel
-        if (_settings_y != _settings_target) {
-            int diff = _settings_target - _settings_y;
-            int step = diff / 4;
-            if (step == 0) step = (diff > 0) ? 1 : -1;
-            _settings_y += step;
-            if (abs(_settings_y - _settings_target) < 3)
-                _settings_y = _settings_target;
-            _settings_dirty = true;
-        }
+        // (Settings panel no longer animates — the slide left a trail of
+        // part-drawn frames behind it because nothing repainted the strip it
+        // revealed while closing. Instant open/close, one clean draw each.)
     }
 
     void render() {
@@ -289,17 +281,20 @@ private:
         // Pause the active applet so its drawing doesn't overwrite the panel
         _pause_active();
         _settings_open   = true;
-        _settings_target = _h - PANEL_H;
+        _settings_y      = _h - PANEL_H;   // instant: no slide, no trail
+        _settings_target = _settings_y;
         _settings_dirty  = true;
     }
 
     void _close_settings() {
         _settings_open   = false;
+        _settings_y      = _h;             // instant: gone in one frame
         _settings_target = _h;
-        _settings_dirty  = true;
-        // Resume the active applet and force full redraw to clear ghost
+        _settings_dirty  = false;
+        _dirty = true;                     // home / top-bar full repaint
+        // Applets repair their own content in on_resume (the panel overdrew
+        // regions their normal draw path never repaints).
         _resume_active();
-        _dirty = true;
     }
 
     void _close_settings_immediate() {

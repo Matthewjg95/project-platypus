@@ -106,26 +106,39 @@ void ScanGeometry::addFloorCells(const uint8_t* occ, int stride, int nx, int nz,
         return gx >= 0 && gz >= 0 && gx < nx && gz < nz &&
                occ[gz * stride + gx] != 0;
     };
-    // top + bottom surfaces, one quad per horizontal run
+    // TOP surface only — no underside. The slab-style bottom faces tied with
+    // the top in the painter's depth sort and bled through as dark streaks
+    // from oblique angles. A floor is never viewed from below; the boundary
+    // skirts keep the thickness illusion.
+    // Greedy maximal-rectangle cover: grow each uncovered cell to the widest
+    // row run, then extend that full width down as many rows as stay
+    // occupied. Large unified quads instead of per-row strips = the floor
+    // reads as one surface, not stacked planks.
+    static uint8_t used[64 * 64];
+    memset(used, 0, (size_t)stride * nz);
     for (int gz = 0; gz < nz; ++gz) {
-        int run = -1;
-        for (int gx = 0; gx <= nx; ++gx) {
-            bool on = at(gx, gz);
-            if (on && run < 0) run = gx;
-            else if (!on && run >= 0) {
-                float x0 = minx + run * cell, x1 = minx + gx * cell;
-                float z0 = minz + gz * cell,  z1 = z0 + cell;
-                float rx = (x0 + x1) * 0.5f,  rz = (z0 + z1) * 0.5f;
-                uint32_t a=addVertex(x0,y1,z0), b=addVertex(x1,y1,z0),
-                         c=addVertex(x1,y1,z1), d=addVertex(x0,y1,z1);
-                addOrientedTri(a,b,c, rx, 1.0f, rz, true);
-                addOrientedTri(a,c,d, rx, 1.0f, rz, true);
-                uint32_t e=addVertex(x0,y0,z0), f=addVertex(x1,y0,z0),
-                         g=addVertex(x1,y0,z1), h=addVertex(x0,y0,z1);
-                addOrientedTri(e,f,g, rx, y0 - 1.0f, rz, true);
-                addOrientedTri(e,g,h, rx, y0 - 1.0f, rz, true);
-                run = -1;
+        for (int gx = 0; gx < nx; ++gx) {
+            if (!at(gx, gz) || used[gz * stride + gx]) continue;
+            int w = 1;
+            while (gx + w < nx && at(gx + w, gz) && !used[gz * stride + gx + w]) ++w;
+            int h = 1;
+            while (gz + h < nz) {
+                bool ok = true;
+                for (int k = 0; k < w; ++k)
+                    if (!at(gx + k, gz + h) || used[(gz + h) * stride + gx + k]) { ok = false; break; }
+                if (!ok) break;
+                ++h;
             }
+            for (int r = 0; r < h; ++r)
+                for (int k = 0; k < w; ++k)
+                    used[(gz + r) * stride + gx + k] = 1;
+            float x0 = minx + gx * cell, x1 = x0 + w * cell;
+            float z0 = minz + gz * cell, z1 = z0 + h * cell;
+            float rx = (x0 + x1) * 0.5f, rz = (z0 + z1) * 0.5f;
+            uint32_t a=addVertex(x0,y1,z0), b=addVertex(x1,y1,z0),
+                     c=addVertex(x1,y1,z1), d=addVertex(x0,y1,z1);
+            addOrientedTri(a,b,c, rx, 1.0f, rz, true);
+            addOrientedTri(a,c,d, rx, 1.0f, rz, true);
         }
     }
     // Z-facing skirts: cells whose north/south neighbour is empty
