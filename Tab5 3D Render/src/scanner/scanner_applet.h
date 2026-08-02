@@ -248,7 +248,8 @@ private:
     PoseTracker _pose;
     RoomPath    _path;
     bool        _walk = false;
-    int         _path_drawn = -1;    // mini-map redraw tracking
+    int         _path_drawn = -1;      // mini-map redraw tracking
+    int         _path_scan_start = 0;  // first path index from the current scan
     uint8_t _gray[160*120];
 
     // ====================================================
@@ -333,24 +334,24 @@ private:
         }
         M5.Display.drawFastHLine(0, BAR_H + 40, dw, COL_DIVIDER);
 
-        // fixed buttons: Scan (spin) | Walk scan | Live viewfinder | Map
-        // quarter-width columns; hit tests in _update_browse mirror these
-        int q = dw / 4;
+        // fixed buttons: Scan new room | Live viewfinder | Building map.
+        // Walking is NOT here on purpose: a walk can't establish a room (no
+        // landmarks to register against, so dead-reckoning drift goes
+        // uncorrected). Sweep to CREATE, then WALK+ inside the room to
+        // EXTEND it — the object constellation absorbs the walk's drift.
+        int q = dw / 3;
         ui_theme::font_button(&M5.Display);
         M5.Display.fillRoundRect(12, BAR_H + 52, q - 18, 50, 6, ui_theme::SURFACE_2);
-        M5.Display.setTextColor(COL_TEXT); M5.Display.setCursor(64, BAR_H + 64);
-        M5.Display.print("Scan");
-        ui_icons::radar(&M5.Display, 40, BAR_H + 77, 30, COL_TEXT);
-        M5.Display.fillRoundRect(q + 6, BAR_H + 52, q - 12, 50, 6, ui_theme::SURFACE_2);
-        M5.Display.setCursor(q + 60, BAR_H + 64);
-        M5.Display.print("Walk scan");
-        M5.Display.fillRoundRect(2*q + 6, BAR_H + 52, q - 12, 50, 6, ui_theme::ACCENT);
-        M5.Display.setCursor(2*q + 60, BAR_H + 64);
+        M5.Display.setTextColor(COL_TEXT); M5.Display.setCursor(70, BAR_H + 64);
+        M5.Display.print("Scan new room");
+        ui_icons::radar(&M5.Display, 42, BAR_H + 77, 30, COL_TEXT);
+        M5.Display.fillRoundRect(q + 6, BAR_H + 52, q - 12, 50, 6, ui_theme::ACCENT);
+        M5.Display.setCursor(q + 66, BAR_H + 64);
         M5.Display.print("Live");
-        ui_icons::cube(&M5.Display, 2*q + 34, BAR_H + 77, 26, COL_TEXT);
-        M5.Display.fillRoundRect(3*q + 6, BAR_H + 52, q - 18, 50, 6, ui_theme::SURFACE_2);
-        M5.Display.setCursor(3*q + 60, BAR_H + 64);
-        M5.Display.print("Map");
+        ui_icons::cube(&M5.Display, q + 38, BAR_H + 77, 26, COL_TEXT);
+        M5.Display.fillRoundRect(2*q + 6, BAR_H + 52, q - 18, 50, 6, ui_theme::SURFACE_2);
+        M5.Display.setCursor(2*q + 66, BAR_H + 64);
+        M5.Display.print("Building map");
 
         // visible window of rooms, pixel-scrolled; clip so partial rows never
         // bleed into the header/scan-button area
@@ -470,20 +471,15 @@ private:
             _need_redraw = true;                       // settle final position
             bool tap = _drag_px < 15 && (millis() - _press_ms) < 350;
             if (tap && _last_ty >= 0) {
-                int dw_ = M5.Display.width(), q_ = dw_ / 4;
+                int dw_ = M5.Display.width(), q_ = dw_ / 3;
                 if (_last_ty >= BAR_H + 52 && _last_ty < BAR_H + 102) {
                     ui_feedback::tick();
-                    if (_last_tx >= 3*q_) {
-                        ui_theme::press_flash(3*q_ + 6, BAR_H + 52, q_ - 18, 50);
+                    if (_last_tx >= 2*q_) {
+                        ui_theme::press_flash(2*q_ + 6, BAR_H + 52, q_ - 18, 50);
                         _enter_map();
-                    } else if (_last_tx >= 2*q_) {
-                        ui_theme::press_flash(2*q_ + 6, BAR_H + 52, q_ - 12, 50);
-                        _enter_live();
                     } else if (_last_tx >= q_) {
-                        if (_pipeline_ok) {
-                            ui_theme::press_flash(q_ + 6, BAR_H + 52, q_ - 12, 50);
-                            _start_walk();
-                        }
+                        ui_theme::press_flash(q_ + 6, BAR_H + 52, q_ - 12, 50);
+                        _enter_live();
                     } else if (_pipeline_ok) {
                         ui_theme::press_flash(12, BAR_H + 52, q_ - 18, 50);
                         _start_scan();
@@ -543,14 +539,18 @@ private:
     }
 
     void _start_scan() { _walk = false; _start_scan_impl(false); }
-    void _start_walk() { _walk = true;  _start_scan_impl(false); }
 
     // Rescan the currently open room: new observations are registered against
     // the room's object database (yaw+translation solved from the objects
     // themselves) and merged, so the model improves instead of resetting.
-    void _start_rescan() {
+    // Two flavours: SCAN+ (sweep in place) and WALK+ (walk the room; the
+    // walked path becomes floor-truth). Walking is additive-only by design —
+    // it needs the room's landmarks to absorb dead-reckoning drift.
+    void _start_rescan()      { _start_rescan_impl(false); }
+    void _start_walk_rescan() { _start_rescan_impl(true);  }
+    void _start_rescan_impl(bool walk) {
         if (!_mesh_loaded) return;
-        _walk = false;
+        _walk = walk;
         _objdb.loadBeside(_mesh_path);        // may be empty for pre-DB rooms
         _start_scan_impl(true);
     }
@@ -564,6 +564,10 @@ private:
         _acc_n = 0; _fitter.reset(); _slam.reset();
         _pose.reset(); _path_drawn = -1;
         if (!additive) _path.clear();     // additive keeps the room's path
+        // Points from THIS scan start here. They are in the scan's own frame
+        // (you start a walk wherever you stand, calling it 0,0) and get the
+        // same registration transform as the objects at write time.
+        _path_scan_start = _path.count;
         if (_walk) _path.add(0.0f, 0.0f);
         _fb.invalidateAll();          // never sample a previous scan's frame
         _scanning = true; _scan_start = millis(); _last_sample = 0; _last_seq = 0;
@@ -618,10 +622,14 @@ private:
         float cx = (x0 + x1) * 0.5f, cz = (z0 + z1) * 0.5f;
         auto sx = [&](float x) { return bx + bs/2 + (int)((x - cx) * s); };
         auto sy = [&](float z) { return by + bs/2 + (int)((z - cz) * s); };
+        // room's existing path (from earlier walks) dim; THIS walk in accent.
+        // Note: during an additive walk the two are in different frames until
+        // registration aligns them at FINISH — the trace is a guide, not a map.
         for (int i = 1; i < _path.count; ++i)
             M5.Display.drawLine(sx(_path.x(i-1)), sy(_path.z(i-1)),
                                 sx(_path.x(i)),   sy(_path.z(i)),
-                                ui_theme::ACCENT);
+                                i >= _path_scan_start ? ui_theme::ACCENT
+                                                      : ui_theme::SURFACE_2);
         M5.Display.fillCircle(sx(0), sy(0), 4, TFT_WHITE);          // origin
         M5.Display.fillCircle(sx(_pose.x()), sy(_pose.z()), 5,
                               ui_theme::ACCENT);                    // you
@@ -993,6 +1001,16 @@ private:
                 _objdb.merge(nw[i].cls, x, nw[i].y, z, nw[i].h, nw[i].n,
                              _default_visible(nw[i].cls) ? ROBJ_VISIBLE : 0);
             }
+            // The walked path from THIS scan lives in the same scan frame as
+            // the objects — a WALK+ starts at "0,0" wherever you stand. Give
+            // its new points the identical transform, or the floor-truth
+            // corridor lands rotated/offset against the room it belongs to.
+            for (int i = _path_scan_start; i < _path.count; ++i) {
+                float x = _path.px_cm[i] * 0.01f, z = _path.pz_cm[i] * 0.01f;
+                RoomObjDB::apply(T, x, z);
+                _path.px_cm[i] = (int16_t)(x * 100.0f);
+                _path.pz_cm[i] = (int16_t)(z * 100.0f);
+            }
         } else {
             for (int i = 0; i < _acc_n; ++i)
                 _objdb.merge(_acc[i].cls, _acc[i].x, _acc[i].y, _acc[i].z,
@@ -1175,6 +1193,12 @@ private:
                     _open_obj_menu();
                     return true;
                 }
+                if (t.x >= ox + _cv_w - 452 && t.x < ox + _cv_w - 344 &&
+                    t.y >= oy + 4 && t.y < oy + 56) {
+                    ui_feedback::tick();
+                    _start_walk_rescan();
+                    return true;
+                }
             }
             if (t.y >= BAR_H && _prev_touch && _prev_tx >= 0) {
                 int dx = t.x - _prev_tx, dy = t.y - _prev_ty;
@@ -1256,6 +1280,9 @@ private:
         // [OBJ] button -> per-room object on/off menu
         _canvas->fillRoundRect(_cv_w - 336, 4, 108, 48, 6, 0x2945);
         _canvas->setCursor(_cv_w - 318, 18); _canvas->print("OBJ");
+        // [WALK+] button -> additive walk of this room (path = floor truth)
+        _canvas->fillRoundRect(_cv_w - 452, 4, 108, 48, 6, 0x0300);
+        _canvas->setCursor(_cv_w - 446, 18); _canvas->print("WALK+");
         int ox = (M5.Display.width() - _cv_w) / 2;
         int oy = (M5.Display.height() - _cv_h) / 2;
         _canvas->pushSprite(ox, oy);
