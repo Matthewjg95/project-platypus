@@ -45,13 +45,15 @@ public:
     float focalPx() const { return _focal_px; }
 
     // ---- sanity gates (see estimate() for rationale) --------------------
-    static const int       MIN_BOX_PX  = 8;      // in the downscaled frame
+    // +15% sensitivity pass: 8->7px minimum (farther objects range in),
+    // 8->9m ceiling, 2.2->2.5 aspect tolerance.
+    static const int       MIN_BOX_PX  = 7;      // in the downscaled frame
     // Allowed w/h deviation factor from the class's expected aspect. 1.8 was
     // too tight for furniture seen off-axis (a sofa at 45deg reads ~half its
     // frontal aspect) and cost sweeps real objects; 2.2 keeps the garbage
     // gate (sideways/occluded nonsense) without taxing viewing angle.
-    static constexpr float ASPECT_TOL  = 2.2f;   // allowed w/h deviation factor
-    static constexpr float MAX_RANGE_M = 8.0f;   // indoor plausibility ceiling
+    static constexpr float ASPECT_TOL  = 2.5f;   // allowed w/h deviation factor
+    static constexpr float MAX_RANGE_M = 9.0f;   // indoor plausibility ceiling
 
 private:
     int   _w, _h;

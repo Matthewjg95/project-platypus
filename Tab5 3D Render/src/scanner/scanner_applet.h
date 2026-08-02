@@ -728,7 +728,9 @@ private:
     // missing real furniture. 16 admits nearly everything the camera reports
     // — the real vetting is spatial (MIN_OBSERVATIONS same-cell sightings),
     // positional (median-of-9), and the box sanity gates in the estimator.
-    static const uint8_t ACC_CONF     = 16;
+    // (16 -> 14 in the +15% sensitivity pass; the camera itself only sends
+    // conf >= 15, so the effective floor is now the camera's own threshold)
+    static const uint8_t ACC_CONF     = 14;
 
     // Per-class strictness: VOC "person" is the model's most trigger-happy
     // class (a live scan mapped half a room as people). It has to clear a
