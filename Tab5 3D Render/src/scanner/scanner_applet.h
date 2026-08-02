@@ -16,6 +16,9 @@
 #include "scan_mesh_writer.h"
 #include "rf_survey.h"
 #include "room_objdb.h"
+#include "pose_tracker.h"
+#include "room_path.h"
+#include "room_carve.h"
 #include "../rf_switch.h"
 #include "../ui_feedback.h"
 #include "../ui_theme.h"
@@ -97,6 +100,10 @@ public:
             _close_obj_menu();                  // applying any staged toggles
             return true;
         }
+        if (_state == MAP) {
+            _state = BROWSE; _need_redraw = true; _reset_touch();
+            return true;
+        }
         if (_state == VIEW || _state == SCAN || _state == LIVE) {
             if (_scanning) _abort_scan();
             _state = BROWSE; _need_redraw = true;
@@ -117,6 +124,7 @@ public:
             case VIEW: _clear_content();    break;  // canvas repaints itself
             case LIVE: _enter_live();       break;  // re-clears + reprints hint
             case SCAN: _draw_scan_chrome(); break;  // FINISH + ring + preview
+            case MAP:  _map_dirty = true;   break;
             default:   break;               // BROWSE/SURVEY full-redraw flags
         }
     }
@@ -139,6 +147,7 @@ public:
             case VIEW:   return _update_view();
             case SURVEY: return _update_survey();
             case LIVE:   return true;             // passive: draw-only state
+            case MAP:    return _update_map();
         }
         return true;
     }
@@ -151,11 +160,12 @@ public:
             case VIEW:   _draw_view();  break;
             case SURVEY: if (_rf_redraw) _draw_survey(); break;
             case LIVE:   _draw_live();  break;
+            case MAP:    if (_map_dirty) _draw_map(); break;
         }
     }
 
 private:
-    enum State { BROWSE, SCAN, VIEW, SURVEY, LIVE };
+    enum State { BROWSE, SCAN, VIEW, SURVEY, LIVE, MAP };
     State _state = BROWSE;
     bool  _paused = false;     // Settings panel open over us
 
@@ -232,6 +242,13 @@ private:
     // closing persists flags + rebuilds the mesh.
     bool   _obj_menu = false, _obj_menu_dirty = false, _obj_menu_changed = false;
     int8_t _obj_rows[16]; int _obj_row_n = 0;   // db indices of listed rows
+
+    // Walk scan (#2): dead-reckoned pose (IMU step detection) + walked path.
+    // The path is floor-truth carve evidence, persisted in a .path sidecar.
+    PoseTracker _pose;
+    RoomPath    _path;
+    bool        _walk = false;
+    int         _path_drawn = -1;    // mini-map redraw tracking
     uint8_t _gray[160*120];
 
     // ====================================================
@@ -316,17 +333,24 @@ private:
         }
         M5.Display.drawFastHLine(0, BAR_H + 40, dw, COL_DIVIDER);
 
-        // fixed buttons: Scan new room | Live detection viewfinder
-        int split = dw * 2 / 3;
-        M5.Display.fillRoundRect(12, BAR_H + 52, split - 24, 50, 6, ui_theme::SURFACE_2);
+        // fixed buttons: Scan (spin) | Walk scan | Live viewfinder | Map
+        // quarter-width columns; hit tests in _update_browse mirror these
+        int q = dw / 4;
         ui_theme::font_button(&M5.Display);
-        M5.Display.setTextColor(COL_TEXT); M5.Display.setCursor(58, BAR_H + 64);
-        M5.Display.print("Scan new room");
-        ui_icons::radar(&M5.Display, 36, BAR_H + 77, 30, COL_TEXT);
-        M5.Display.fillRoundRect(split, BAR_H + 52, dw - split - 12, 50, 6, ui_theme::ACCENT);
-        M5.Display.setCursor(split + 48, BAR_H + 64);
-        M5.Display.print("Live view");
-        ui_icons::cube(&M5.Display, split + 28, BAR_H + 77, 26, COL_TEXT);
+        M5.Display.fillRoundRect(12, BAR_H + 52, q - 18, 50, 6, ui_theme::SURFACE_2);
+        M5.Display.setTextColor(COL_TEXT); M5.Display.setCursor(64, BAR_H + 64);
+        M5.Display.print("Scan");
+        ui_icons::radar(&M5.Display, 40, BAR_H + 77, 30, COL_TEXT);
+        M5.Display.fillRoundRect(q + 6, BAR_H + 52, q - 12, 50, 6, ui_theme::SURFACE_2);
+        M5.Display.setCursor(q + 60, BAR_H + 64);
+        M5.Display.print("Walk scan");
+        M5.Display.fillRoundRect(2*q + 6, BAR_H + 52, q - 12, 50, 6, ui_theme::ACCENT);
+        M5.Display.setCursor(2*q + 60, BAR_H + 64);
+        M5.Display.print("Live");
+        ui_icons::cube(&M5.Display, 2*q + 34, BAR_H + 77, 26, COL_TEXT);
+        M5.Display.fillRoundRect(3*q + 6, BAR_H + 52, q - 18, 50, 6, ui_theme::SURFACE_2);
+        M5.Display.setCursor(3*q + 60, BAR_H + 64);
+        M5.Display.print("Map");
 
         // visible window of rooms, pixel-scrolled; clip so partial rows never
         // bleed into the header/scan-button area
@@ -446,14 +470,22 @@ private:
             _need_redraw = true;                       // settle final position
             bool tap = _drag_px < 15 && (millis() - _press_ms) < 350;
             if (tap && _last_ty >= 0) {
-                int dw_ = M5.Display.width(), split_ = dw_ * 2 / 3;
+                int dw_ = M5.Display.width(), q_ = dw_ / 4;
                 if (_last_ty >= BAR_H + 52 && _last_ty < BAR_H + 102) {
                     ui_feedback::tick();
-                    if (_last_tx >= split_) {
-                        ui_theme::press_flash(split_, BAR_H + 52, dw_ - split_ - 12, 50);
+                    if (_last_tx >= 3*q_) {
+                        ui_theme::press_flash(3*q_ + 6, BAR_H + 52, q_ - 18, 50);
+                        _enter_map();
+                    } else if (_last_tx >= 2*q_) {
+                        ui_theme::press_flash(2*q_ + 6, BAR_H + 52, q_ - 12, 50);
                         _enter_live();
+                    } else if (_last_tx >= q_) {
+                        if (_pipeline_ok) {
+                            ui_theme::press_flash(q_ + 6, BAR_H + 52, q_ - 12, 50);
+                            _start_walk();
+                        }
                     } else if (_pipeline_ok) {
-                        ui_theme::press_flash(12, BAR_H + 52, split_ - 24, 50);
+                        ui_theme::press_flash(12, BAR_H + 52, q_ - 18, 50);
                         _start_scan();
                     }
                 } else if (_last_ty >= BR_LIST_Y) {
@@ -510,13 +542,15 @@ private:
         cy = BAR_H + 240;
     }
 
-    void _start_scan() { _start_scan_impl(false); }
+    void _start_scan() { _walk = false; _start_scan_impl(false); }
+    void _start_walk() { _walk = true;  _start_scan_impl(false); }
 
     // Rescan the currently open room: new observations are registered against
     // the room's object database (yaw+translation solved from the objects
     // themselves) and merged, so the model improves instead of resetting.
     void _start_rescan() {
         if (!_mesh_loaded) return;
+        _walk = false;
         _objdb.loadBeside(_mesh_path);        // may be empty for pre-DB rooms
         _start_scan_impl(true);
     }
@@ -528,6 +562,9 @@ private:
             _objdb.clear();
         }
         _acc_n = 0; _fitter.reset(); _slam.reset();
+        _pose.reset(); _path_drawn = -1;
+        if (!additive) _path.clear();     // additive keeps the room's path
+        if (_walk) _path.add(0.0f, 0.0f);
         _fb.invalidateAll();          // never sample a previous scan's frame
         _scanning = true; _scan_start = millis(); _last_sample = 0; _last_seq = 0;
         _yaw_rad = 0; _yaw_bias_dps = 0; _bias_sum = 0; _bias_n = 0;
@@ -557,16 +594,50 @@ private:
         M5.Display.fillArc(cx, cy, RING_R0, RING_R1, 0, 360, ui_theme::SURFACE);
         _ring_deg = 0;             // progress arc redraws from zero next frame
         _preview_dirty = true;     // preview re-pushes next decode/frame
+        _path_drawn = -1;          // walk mini-map repaints next frame
+    }
+
+    // Walk-scan mini-map: the dead-reckoned path traced live in a corner
+    // box — origin dot, walked polyline, current position. Fully repainted
+    // per step (it's tiny), scaled to fit with a 4m minimum span.
+    void _draw_walk_map() {
+        int dw = M5.Display.width();
+        int bx = dw - 268, by = BAR_H + 130, bs = 240;
+        M5.Display.fillRoundRect(bx, by, bs, bs, 8, ui_theme::BG);
+        M5.Display.drawRoundRect(bx, by, bs, bs, 8, ui_theme::SURFACE_2);
+        if (_path.count < 1) return;
+        float x0 = 0, x1 = 0, z0 = 0, z1 = 0;
+        for (int i = 0; i < _path.count; ++i) {
+            float px = _path.x(i), pz = _path.z(i);
+            if (px < x0) x0 = px; if (px > x1) x1 = px;
+            if (pz < z0) z0 = pz; if (pz > z1) z1 = pz;
+        }
+        float span = x1 - x0; if (z1 - z0 > span) span = z1 - z0;
+        if (span < 4.0f) span = 4.0f;
+        float s = (bs - 40) / span;
+        float cx = (x0 + x1) * 0.5f, cz = (z0 + z1) * 0.5f;
+        auto sx = [&](float x) { return bx + bs/2 + (int)((x - cx) * s); };
+        auto sy = [&](float z) { return by + bs/2 + (int)((z - cz) * s); };
+        for (int i = 1; i < _path.count; ++i)
+            M5.Display.drawLine(sx(_path.x(i-1)), sy(_path.z(i-1)),
+                                sx(_path.x(i)),   sy(_path.z(i)),
+                                ui_theme::ACCENT);
+        M5.Display.fillCircle(sx(0), sy(0), 4, TFT_WHITE);          // origin
+        M5.Display.fillCircle(sx(_pose.x()), sy(_pose.z()), 5,
+                              ui_theme::ACCENT);                    // you
     }
     void _abort_scan() { _scanning = false; }
 
     // World-vertical rotation rate in deg/s: gyro projected onto gravity.
+    // Also stashes |accel| for the walk-scan step detector.
+    float _imu_amag = 1.0f;
     float _yaw_rate_dps() {
         M5.Imu.update();
         float gx, gy, gz, ax, ay, az;
         M5.Imu.getGyro(&gx, &gy, &gz);
         M5.Imu.getAccel(&ax, &ay, &az);
         float an = sqrtf(ax*ax + ay*ay + az*az);
+        _imu_amag = an;
         if (an < 0.5f) return 0.0f;       // free-fall/garbage guard
         return (gx*ax + gy*ay + gz*az) / an;
     }
@@ -719,6 +790,10 @@ private:
             if (d.confidence < _acc_conf(d.class_id)) continue;
             if (!_depth.isKnown(d.class_id)) continue;
             ObjectEstimate e = _depth.estimate(d.class_id, d.x/2, d.w/2, d.h/2, yaw);
+            if (e.valid && _walk) {          // camera is AT the walked pose,
+                e.x += _pose.x();            // not the origin
+                e.z += _pose.z();
+            }
             if (e.valid) _acc_add(d.class_id, e);
         }
         // dial pip for every NEWLY discovered object at the current bearing
@@ -731,9 +806,14 @@ private:
         if (!_scanning) return true;
         uint32_t now = millis(), el = now - _scan_start;
         _imu_tick(now, el);
+        // Walk mode: step-advance the dead-reckoned pose along the heading
+        if (_walk && _bias_locked &&
+            _pose.tick(_imu_amag, _yaw_rad, now))
+            _path.add(_pose.x(), _pose.z());
         // Finish on a completed 360-degree sweep (measured, not assumed) or
-        // when the user taps FINISH. No timeout — the sweep is theirs to pace.
-        bool full_turn = fabsf(_yaw_rad) >= 2.0f * (float)M_PI;
+        // when the user taps FINISH. Walk scans have no natural end — the
+        // FINISH button is the only exit. No timeout either way.
+        bool full_turn = !_walk && fabsf(_yaw_rad) >= 2.0f * (float)M_PI;
         if (full_turn && el > 5000) { ui_feedback::buzz2(); _finish_scan(); return true; }
         if (M5.Touch.getCount() > 0) {
             if (!_prev_touch) {
@@ -810,8 +890,9 @@ private:
         if (deg > 360.0f) deg = 360.0f;
 
         // incremental progress arc: 12 o'clock, clockwise, accent-filled.
-        // Drawing only the new slice avoids flicker on the ring.
-        if ((int)deg > _ring_deg) {
+        // Drawing only the new slice avoids flicker on the ring. (Walk mode
+        // has no 360 target — the ring stays a compass for detection pips.)
+        if (!_walk && (int)deg > _ring_deg) {
             float a0 = 270.0f + _ring_deg, a1 = 270.0f + deg;
             if (a1 <= 360.0f)
                 M5.Display.fillArc(cx, cy, RING_R0, RING_R1, a0, a1, ui_theme::ACCENT);
@@ -836,8 +917,16 @@ private:
         M5.Display.setCursor(12, BAR_H + 490);
         if (!_bias_locked)
             M5.Display.print("Face a corner, hold still...  ");
+        else if (_walk)
+            M5.Display.printf("Walk: %d steps  %.1fm       ",
+                              _pose.steps(), _pose.distance());
         else
             M5.Display.printf("Sweep %3d\xF8 %d%% (360=done) ", (int)deg, pct);
+        // walk mode: live path trace, redrawn when the path grows
+        if (_walk && _path.count != _path_drawn) {
+            _path_drawn = _path.count;
+            _draw_walk_map();
+        }
         M5.Display.setCursor(12, BAR_H + 520);
         M5.Display.printf("%s objs:%d  frames:%d   ",
                           _phase2 ? "SfM" : "box", _acc_n,
@@ -921,58 +1010,25 @@ private:
         auto shown = [](const RoomObj& o) {
             return o.n >= _min_obs(o.cls) && (o.flags & ROBJ_VISIBLE);
         };
-        // ---- visibility-carved floor -----------------------------------
-        // Non-rectangular rooms from camera-only evidence: every displayed
-        // object was SEEN from the origin, so the sight-line between them is
-        // open floor. Stamp the origin, each object, and each sight-line
-        // corridor into a coarse occupancy grid; the union of stamped cells
-        // becomes the floor. L-shapes and extensions emerge naturally — an
-        // object down a hallway pulls a corridor of floor with it instead of
-        // inflating one bounding rectangle. Hidden objects stamp nothing, so
-        // clutter can't stretch the layout. (Walls stay Phase-2/ToF work.)
-        static const float CELL   = 0.25f;   // grid resolution, metres
-        static const int   GN     = 64;      // grid span: 16m per axis
-        static const float R_ORG  = 0.9f;    // open floor where you stood
-        static const float R_OBJ  = 0.7f;    // open floor around an object
-        static const float R_LOS  = 0.45f;   // sight-line corridor half-width
+        // ---- visibility-carved floor (shared logic: room_carve.h) -------
+        // Origin + walked path + objects + sight-line corridors union into
+        // the floor. The walked path is floor-truth from walk scans and is
+        // persisted beside the mesh so rebuilds stay faithful after reboots.
+        static const float CELL = 0.25f;     // grid resolution, metres
+        static const int   GN   = 64;        // grid span: 16m per axis
         static uint8_t occ[GN * GN];
-        memset(occ, 0, sizeof(occ));
-        float minx = -1.2f, maxx = 1.2f, minz = -1.2f, maxz = 1.2f;
-        for (int i = 0; i < _objdb.count; ++i) {
-            const RoomObj& o = _objdb.objs[i];
-            if (!shown(o)) continue;
-            if (o.x - 1.0f < minx) minx = o.x - 1.0f;
-            if (o.x + 1.0f > maxx) maxx = o.x + 1.0f;
-            if (o.z - 1.0f < minz) minz = o.z - 1.0f;
-            if (o.z + 1.0f > maxz) maxz = o.z + 1.0f;
-        }
-        int nx = (int)((maxx - minx) / CELL) + 1; if (nx > GN) nx = GN;
-        int nz = (int)((maxz - minz) / CELL) + 1; if (nz > GN) nz = GN;
-        auto stamp = [&](float sx, float sz, float r) {
-            int x0 = (int)((sx - r - minx) / CELL), x1 = (int)((sx + r - minx) / CELL);
-            int z0 = (int)((sz - r - minz) / CELL), z1 = (int)((sz + r - minz) / CELL);
-            for (int gz = z0 < 0 ? 0 : z0; gz <= z1 && gz < nz; ++gz)
-                for (int gx = x0 < 0 ? 0 : x0; gx <= x1 && gx < nx; ++gx) {
-                    float dx = minx + (gx + 0.5f) * CELL - sx;
-                    float dz = minz + (gz + 0.5f) * CELL - sz;
-                    if (dx*dx + dz*dz <= r*r) occ[gz * GN + gx] = 1;
-                }
-        };
-        stamp(0.0f, 0.0f, R_ORG);
-        for (int i = 0; i < _objdb.count; ++i) {
-            const RoomObj& o = _objdb.objs[i];
-            if (!shown(o)) continue;
-            stamp(o.x, o.z, R_OBJ);
-            float d = sqrtf(o.x*o.x + o.z*o.z);
-            int steps = (int)(d / CELL) + 1;
-            for (int s = 1; s < steps; ++s) {
-                float t = (float)s / (float)steps;
-                stamp(o.x * t, o.z * t, R_LOS);
-            }
-        }
+        static uint8_t shown_f[RoomObjDB::MAX_OBJS];
+        for (int i = 0; i < _objdb.count; ++i)
+            shown_f[i] = shown(_objdb.objs[i]) ? 1 : 0;
+        float minx, minz; int nx, nz;
+        room_carve::carve(occ, GN, CELL, _objdb, shown_f,
+                          _path.count ? &_path : nullptr,
+                          minx, minz, nx, nz);
         _geom.reset();
         _geom.addFloorCells(occ, GN, nx, nz, minx, minz, CELL);
         _geom.addOriginArrow();                // where the (first) scan began
+        if (_path.count >= 2) _path.saveBeside(path);
+        else                  RoomPath::removeBeside(path);   // stale walk path
 
         struct LblTmp { float x, y, z; uint8_t cls; };
         static LblTmp tmp[64];        // static: keep ~832B off the loop stack
@@ -1346,6 +1402,217 @@ private:
         }
     }
 
+    // ==================== BUILDING MAP (#4) ==============================
+    // Manual building assembly: every room's carved footprint on one
+    // top-down canvas. Drag a room to arrange your house — positions persist
+    // in building.map — and tap a room to open it. When walk-scan doorway
+    // stitching arrives, these arranged offsets become its initial guess.
+    static const int MAP_MAX_ROOMS = 12;
+    static const int MAP_GN        = 40;
+    static constexpr float MAP_CELL  = 0.40f;   // carve pitch for thumbnails
+    static constexpr float MAP_SCALE = 26.0f;   // px per metre on screen
+    struct MapRoom {
+        char    name[PM_MAX_NAME];
+        uint8_t occ[MAP_GN * MAP_GN];
+        float   minx, minz;
+        int     nx, nz;
+        float   offx, offz;                     // building-frame offset (m)
+        struct Dot { float x, z; uint8_t cls; } dots[16];
+        int     dot_n;
+    };
+    MapRoom* _map_rooms = nullptr;              // ~22KB, allocated on demand
+    int      _map_n = 0;
+    int      _map_drag = -1;
+    int      _map_ltx = 0, _map_lty = 0, _map_sx0 = 0, _map_sy0 = 0;
+    float    _map_cx = 0.0f, _map_cz = 0.0f;    // view centre (metres)
+    bool     _map_moved = false;
+    bool     _map_dirty = false;
+    uint32_t _map_press = 0;
+
+    void _bld_map_path(char* out, unsigned n) {
+        snprintf(out, n, "/meshscan/buildings/%s/building.map", _building);
+    }
+
+    void _map_load_offsets() {
+        char p[200]; _bld_map_path(p, sizeof(p));
+        File f = SD_MMC.open(p, FILE_READ);
+        if (!f) return;
+        char m[4];
+        if (f.read((uint8_t*)m, 4) == 4 && memcmp(m, "BLD1", 4) == 0) {
+            uint8_t n = 0; f.read(&n, 1);
+            for (uint8_t i = 0; i < n; ++i) {
+                char nm[PM_MAX_NAME]; float ox, oz;
+                if (f.read((uint8_t*)nm, PM_MAX_NAME) != PM_MAX_NAME) break;
+                if (f.read((uint8_t*)&ox, 4) != 4) break;
+                if (f.read((uint8_t*)&oz, 4) != 4) break;
+                for (int r = 0; r < _map_n; ++r)
+                    if (strncmp(_map_rooms[r].name, nm, PM_MAX_NAME) == 0) {
+                        _map_rooms[r].offx = ox; _map_rooms[r].offz = oz;
+                    }
+            }
+        }
+        f.close();
+    }
+
+    void _map_save_offsets() {
+        char p[200]; _bld_map_path(p, sizeof(p));
+        File f = SD_MMC.open(p, FILE_WRITE);
+        if (!f) return;
+        f.write((const uint8_t*)"BLD1", 4);
+        uint8_t n = (uint8_t)_map_n; f.write(&n, 1);
+        for (int r = 0; r < _map_n; ++r) {
+            f.write((const uint8_t*)_map_rooms[r].name, PM_MAX_NAME);
+            f.write((const uint8_t*)&_map_rooms[r].offx, 4);
+            f.write((const uint8_t*)&_map_rooms[r].offz, 4);
+        }
+        f.close();
+    }
+
+    void _enter_map() {
+        if (!_map_rooms) _map_rooms = new MapRoom[MAP_MAX_ROOMS];
+        _map_n = 0;
+        static RoomObjDB tdb;
+        static RoomPath  tpath;
+        static uint8_t   tshown[RoomObjDB::MAX_OBJS];
+        float next_x = 0.0f;
+        for (int r = 0; r < (int)_rooms.size() && _map_n < MAP_MAX_ROOMS; ++r) {
+            char mp[200];
+            if (!_pm.meshPath(_building, _rooms[r].c_str(), mp, sizeof(mp)))
+                continue;
+            tdb.loadBeside(mp);                  // empty db is fine
+            tpath.clear(); tpath.loadBeside(mp);
+            MapRoom& m = _map_rooms[_map_n];
+            strncpy(m.name, _rooms[r].c_str(), PM_MAX_NAME - 1);
+            m.name[PM_MAX_NAME - 1] = '\0';
+            for (int i = 0; i < tdb.count; ++i)
+                tshown[i] = ((tdb.objs[i].flags & ROBJ_VISIBLE) &&
+                             tdb.objs[i].n >= _min_obs(tdb.objs[i].cls)) ? 1 : 0;
+            room_carve::carve(m.occ, MAP_GN, MAP_CELL, tdb, tshown,
+                              tpath.count ? &tpath : nullptr,
+                              m.minx, m.minz, m.nx, m.nz);
+            m.dot_n = 0;
+            for (int i = 0; i < tdb.count && m.dot_n < 16; ++i)
+                if (tshown[i])
+                    m.dots[m.dot_n++] = { tdb.objs[i].x, tdb.objs[i].z,
+                                          tdb.objs[i].cls };
+            // default: rooms in a row until building.map says otherwise
+            m.offx = next_x - m.minx;
+            m.offz = 0.0f - m.minz;
+            next_x += m.nx * MAP_CELL + 1.0f;
+            ++_map_n;
+        }
+        _map_load_offsets();
+        // centre the view on the arranged content
+        float x0 = 1e9f, x1 = -1e9f, z0 = 1e9f, z1 = -1e9f;
+        for (int i = 0; i < _map_n; ++i) {
+            const MapRoom& m = _map_rooms[i];
+            float rx0 = m.offx + m.minx, rz0 = m.offz + m.minz;
+            float rx1 = rx0 + m.nx * MAP_CELL, rz1 = rz0 + m.nz * MAP_CELL;
+            if (rx0 < x0) x0 = rx0; if (rx1 > x1) x1 = rx1;
+            if (rz0 < z0) z0 = rz0; if (rz1 > z1) z1 = rz1;
+        }
+        _map_cx = _map_n ? (x0 + x1) * 0.5f : 0.0f;
+        _map_cz = _map_n ? (z0 + z1) * 0.5f : 0.0f;
+        _map_drag = -1;
+        _state = MAP; _map_dirty = true;
+        _reset_touch();
+    }
+
+    int _map_room_at(int tx, int ty) {
+        int dw = M5.Display.width(), dh = M5.Display.height();
+        int midy = BAR_H + (dh - BAR_H) / 2;
+        for (int r = _map_n - 1; r >= 0; --r) {     // topmost drawn wins
+            const MapRoom& m = _map_rooms[r];
+            int x0 = dw/2 + (int)((m.offx + m.minx - _map_cx) * MAP_SCALE);
+            int y0 = midy + (int)((m.offz + m.minz - _map_cz) * MAP_SCALE);
+            int x1 = x0 + (int)(m.nx * MAP_CELL * MAP_SCALE);
+            int y1 = y0 + (int)(m.nz * MAP_CELL * MAP_SCALE);
+            if (tx >= x0 && tx < x1 && ty >= y0 && ty < y1) return r;
+        }
+        return -1;
+    }
+
+    bool _update_map() {
+        bool touched = M5.Touch.getCount() > 0;
+        int tx = -1, ty = -1;
+        if (touched) { auto t = M5.Touch.getDetail(0); tx = t.x; ty = t.y; }
+        if (touched && !_prev_touch) {
+            _map_drag  = _map_room_at(tx, ty);
+            _map_moved = false;
+            _map_ltx = _map_sx0 = tx; _map_lty = _map_sy0 = ty;
+            _map_press = millis();
+        } else if (touched && _map_drag >= 0) {
+            int dx = tx - _map_ltx, dy = ty - _map_lty;
+            if (dx || dy) {
+                _map_rooms[_map_drag].offx += dx / MAP_SCALE;
+                _map_rooms[_map_drag].offz += dy / MAP_SCALE;
+                _map_ltx = tx; _map_lty = ty;
+                if (abs(tx - _map_sx0) + abs(ty - _map_sy0) > 12)
+                    _map_moved = true;
+                static uint32_t lastd = 0;           // repaint throttle
+                if (millis() - lastd >= 40) { lastd = millis(); _map_dirty = true; }
+            }
+        } else if (!touched && _prev_touch) {
+            if (_map_drag >= 0) {
+                if (_map_moved) {
+                    _map_save_offsets();             // arrangement persists
+                    _map_dirty = true;
+                } else if (millis() - _map_press < 350) {
+                    ui_feedback::tick();
+                    _open_room(_map_rooms[_map_drag].name);
+                }
+            }
+            _map_drag = -1;
+        }
+        _prev_touch = touched;
+        return true;
+    }
+
+    void _draw_map() {
+        _map_dirty = false;
+        int dw = M5.Display.width(), dh = M5.Display.height();
+        int midy = BAR_H + (dh - BAR_H) / 2;
+        M5.Display.startWrite();
+        M5.Display.fillRect(0, BAR_H, dw, dh - BAR_H, COL_BG);
+        ui_theme::font_button(&M5.Display);
+        M5.Display.setTextColor(COL_TEXT);
+        M5.Display.setCursor(12, BAR_H + 10);
+        M5.Display.printf("Building map: %s", _building);
+        ui_theme::font_mono1(&M5.Display);
+        M5.Display.setTextColor(COL_SUBTEXT);
+        M5.Display.setCursor(12, BAR_H + 44);
+        M5.Display.print("drag rooms to arrange - tap to open");
+        int cpx = (int)(MAP_CELL * MAP_SCALE) + 1;
+        for (int r = 0; r < _map_n; ++r) {
+            const MapRoom& m = _map_rooms[r];
+            int x0 = dw/2 + (int)((m.offx + m.minx - _map_cx) * MAP_SCALE);
+            int y0 = midy + (int)((m.offz + m.minz - _map_cz) * MAP_SCALE);
+            uint16_t fc = (r == _map_drag) ? ui_theme::SURFACE_2
+                                           : ui_theme::SURFACE;
+            for (int gz = 0; gz < m.nz; ++gz)
+                for (int gx = 0; gx < m.nx; ++gx)
+                    if (m.occ[gz * MAP_GN + gx])
+                        M5.Display.fillRect(
+                            x0 + (int)(gx * MAP_CELL * MAP_SCALE),
+                            y0 + (int)(gz * MAP_CELL * MAP_SCALE),
+                            cpx, cpx, fc);
+            // origin dot (scan start) + object dots in class colours
+            M5.Display.fillCircle(
+                dw/2 + (int)((m.offx - _map_cx) * MAP_SCALE),
+                midy + (int)((m.offz - _map_cz) * MAP_SCALE), 3, TFT_WHITE);
+            for (int d = 0; d < m.dot_n; ++d)
+                M5.Display.fillCircle(
+                    dw/2 + (int)((m.offx + m.dots[d].x - _map_cx) * MAP_SCALE),
+                    midy + (int)((m.offz + m.dots[d].z - _map_cz) * MAP_SCALE),
+                    4, _cls565(m.dots[d].cls));
+            M5.Display.setTextColor(COL_TEXT);
+            M5.Display.setCursor(x0 + 4, y0 - 12);
+            M5.Display.print(m.name);
+        }
+        ui_theme::font_mono(&M5.Display);
+        M5.Display.endWrite();
+    }
+
     void _open_room(const char* room) {
         strncpy(_scan_room, room, sizeof(_scan_room) - 1); _scan_room[sizeof(_scan_room)-1] = '\0';
         char path[200];
@@ -1356,6 +1623,8 @@ private:
             // this the OBJ menu was empty after a reboot — and worse, could
             // show (and rebuild with!) the previously scanned room's objects.
             _objdb.loadBeside(path);
+            _path.clear(); _path.loadBeside(path);   // walked-path evidence
+            _walk = false;
             _mesh_loaded = true; _rs = fit_to_canvas(_mesh, _cv_h, 0.7f);
             _rotation = VM3::rot_x(0.4f) * VM3::rot_y(0.6f); _state = VIEW;
             _reset_touch();
@@ -1688,6 +1957,37 @@ private:
             int sy = _pl_y + (int32_t)(sp.z - _rf_bz0) * _pl_h / (_rf_bz1 - _rf_bz0);
             M5.Display.fillCircle(sx, sy, 8, RfSurvey::colorFor(sp.rssi));
             M5.Display.drawCircle(sx, sy, 8, TFT_BLACK);
+        }
+        // dead-zone / best-spot callouts: worst and best interpolated cells.
+        // This is the practical payoff of the whole survey — "put the router
+        // there, avoid the couch" — so it gets explicit markers, not just
+        // colour you have to read.
+        if (_rf_heat) {
+            int wc = -1, wr = 0, bc = -1, br = 0;
+            int8_t wv = 127, bv = 127;
+            for (int row = 0; row < RfSurvey::GRID_H; ++row)
+                for (int col = 0; col < RfSurvey::GRID_W; ++col) {
+                    int8_t v = _rf.gridValue(col, row);
+                    if (v == 127) continue;
+                    if (wc < 0 || v < wv) { wv = v; wc = col; wr = row; }
+                    if (bc < 0 || v > bv) { bv = v; bc = col; br = row; }
+                }
+            if (bc >= 0 && (wc != bc || wr != br) && bv - wv >= 5) {
+                int sx = _pl_x + (wc * 2 + 1) * _pl_w / (2 * RfSurvey::GRID_W);
+                int sy = _pl_y + (wr * 2 + 1) * _pl_h / (2 * RfSurvey::GRID_H);
+                M5.Display.drawCircle(sx, sy, 14, 0xF800);
+                M5.Display.drawCircle(sx, sy, 15, 0xF800);
+                M5.Display.setTextColor(0xF800, RfSurvey::colorFor(wv));
+                M5.Display.setCursor(sx - 14, sy + 20);
+                M5.Display.printf("DEAD %d", (int)wv);
+                sx = _pl_x + (bc * 2 + 1) * _pl_w / (2 * RfSurvey::GRID_W);
+                sy = _pl_y + (br * 2 + 1) * _pl_h / (2 * RfSurvey::GRID_H);
+                M5.Display.drawCircle(sx, sy, 14, TFT_WHITE);
+                M5.Display.drawCircle(sx, sy, 15, TFT_WHITE);
+                M5.Display.setTextColor(TFT_WHITE, RfSurvey::colorFor(bv));
+                M5.Display.setCursor(sx - 14, sy + 20);
+                M5.Display.printf("BEST %d", (int)bv);
+            }
         }
         // crosshair
         if (_rf_tap_set) {
