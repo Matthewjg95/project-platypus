@@ -94,6 +94,84 @@ void ScanGeometry::addFloorPlate(float cx, float cz, float width, float depth,
     addOrientedTri(v1,v2,v6,rcx,rcy,rcz,false); addOrientedTri(v1,v6,v5,rcx,rcy,rcz,false);
 }
 
+// Carved floor from an occupancy grid. Surfaces are emitted as merged
+// horizontal runs; skirt walls appear only where an occupied cell borders an
+// empty one (or the grid edge), so the interior is seam-free — the naive
+// slab-per-row version drew every row's side walls as dark corduroy stripes.
+void ScanGeometry::addFloorCells(const uint8_t* occ, int stride, int nx, int nz,
+                                 float minx, float minz, float cell,
+                                 float thickness) {
+    const float y0 = -thickness, y1 = 0.0f;    // top surface = floor level y=0
+    auto at = [&](int gx, int gz) -> bool {
+        return gx >= 0 && gz >= 0 && gx < nx && gz < nz &&
+               occ[gz * stride + gx] != 0;
+    };
+    // top + bottom surfaces, one quad per horizontal run
+    for (int gz = 0; gz < nz; ++gz) {
+        int run = -1;
+        for (int gx = 0; gx <= nx; ++gx) {
+            bool on = at(gx, gz);
+            if (on && run < 0) run = gx;
+            else if (!on && run >= 0) {
+                float x0 = minx + run * cell, x1 = minx + gx * cell;
+                float z0 = minz + gz * cell,  z1 = z0 + cell;
+                float rx = (x0 + x1) * 0.5f,  rz = (z0 + z1) * 0.5f;
+                uint32_t a=addVertex(x0,y1,z0), b=addVertex(x1,y1,z0),
+                         c=addVertex(x1,y1,z1), d=addVertex(x0,y1,z1);
+                addOrientedTri(a,b,c, rx, 1.0f, rz, true);
+                addOrientedTri(a,c,d, rx, 1.0f, rz, true);
+                uint32_t e=addVertex(x0,y0,z0), f=addVertex(x1,y0,z0),
+                         g=addVertex(x1,y0,z1), h=addVertex(x0,y0,z1);
+                addOrientedTri(e,f,g, rx, y0 - 1.0f, rz, true);
+                addOrientedTri(e,g,h, rx, y0 - 1.0f, rz, true);
+                run = -1;
+            }
+        }
+    }
+    // Z-facing skirts: cells whose north/south neighbour is empty
+    for (int gz = 0; gz < nz; ++gz) {
+        for (int side = 0; side < 2; ++side) {         // 0 = -Z edge, 1 = +Z edge
+            int run = -1;
+            for (int gx = 0; gx <= nx; ++gx) {
+                bool edge = at(gx, gz) && !at(gx, side ? gz + 1 : gz - 1);
+                if (edge && run < 0) run = gx;
+                else if (!edge && run >= 0) {
+                    float x0 = minx + run * cell, x1 = minx + gx * cell;
+                    float z  = minz + (gz + side) * cell;
+                    float rx = (x0 + x1) * 0.5f;
+                    float rz = side ? z + 1.0f : z - 1.0f;
+                    uint32_t a=addVertex(x0,y0,z), b=addVertex(x1,y0,z),
+                             c=addVertex(x1,y1,z), d=addVertex(x0,y1,z);
+                    addOrientedTri(a,b,c, rx, -thickness*0.5f, rz, true);
+                    addOrientedTri(a,c,d, rx, -thickness*0.5f, rz, true);
+                    run = -1;
+                }
+            }
+        }
+    }
+    // X-facing skirts: cells whose east/west neighbour is empty
+    for (int gx = 0; gx < nx; ++gx) {
+        for (int side = 0; side < 2; ++side) {         // 0 = -X edge, 1 = +X edge
+            int run = -1;
+            for (int gz = 0; gz <= nz; ++gz) {
+                bool edge = at(gx, gz) && !at(side ? gx + 1 : gx - 1, gz);
+                if (edge && run < 0) run = gz;
+                else if (!edge && run >= 0) {
+                    float z0 = minz + run * cell, z1 = minz + gz * cell;
+                    float x  = minx + (gx + side) * cell;
+                    float rz = (z0 + z1) * 0.5f;
+                    float rx = side ? x + 1.0f : x - 1.0f;
+                    uint32_t a=addVertex(x,y0,z0), b=addVertex(x,y0,z1),
+                             c=addVertex(x,y1,z1), d=addVertex(x,y1,z0);
+                    addOrientedTri(a,b,c, rx, -thickness*0.5f, rz, true);
+                    addOrientedTri(a,c,d, rx, -thickness*0.5f, rz, true);
+                    run = -1;
+                }
+            }
+        }
+    }
+}
+
 // Slim arrow lying just above the floor at the origin, tip toward +Z (the
 // direction faced at scan start). Triangles added in both windings so it
 // renders regardless of view side.

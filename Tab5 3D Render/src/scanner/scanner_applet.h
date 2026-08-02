@@ -952,22 +952,7 @@ private:
             }
         }
         _geom.reset();
-        // one thin slab per horizontal run of occupied cells (run-merging
-        // keeps the triangle count to a few dozen slabs, not per-cell)
-        for (int gz = 0; gz < nz; ++gz) {
-            int run = -1;
-            for (int gx = 0; gx <= nx; ++gx) {
-                bool on = gx < nx && occ[gz * GN + gx];
-                if (on && run < 0) run = gx;
-                else if (!on && run >= 0) {
-                    float w   = (gx - run) * CELL;
-                    float cxr = minx + run * CELL + w * 0.5f;
-                    float czr = minz + (gz + 0.5f) * CELL;
-                    _geom.addFloorPlate(cxr, czr, w, CELL);
-                    run = -1;
-                }
-            }
-        }
+        _geom.addFloorCells(occ, GN, nx, nz, minx, minz, CELL);
         _geom.addOriginArrow();                // where the (first) scan began
 
         struct LblTmp { float x, y, z; uint8_t cls; };
