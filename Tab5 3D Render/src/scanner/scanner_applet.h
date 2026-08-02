@@ -1218,7 +1218,9 @@ private:
 
     void _close_obj_menu() {
         _obj_menu = false;
-        if (_obj_menu_changed && _mesh_path[0]) {
+        // count > 0 guard: an empty database must never rebuild (i.e. wipe)
+        // an existing room mesh, whatever state got us here.
+        if (_obj_menu_changed && _mesh_path[0] && _objdb.count > 0) {
             ui_feedback::buzz();
             // _rebuild_from_db persists .objs + .lbl and refreshes _labels in
             // RAM; only the mesh itself needs reloading. Quantisation changes
@@ -1331,6 +1333,10 @@ private:
         if (_pm.meshPath(_building, room, path, sizeof(path)) && load_mesh(path, _mesh)) {
             strncpy(_mesh_path, path, sizeof(_mesh_path)-1); _mesh_path[sizeof(_mesh_path)-1]='\0';
             _read_labels(path);           // object names, if a sidecar exists
+            // THIS room's object database, not whatever RAM holds. Without
+            // this the OBJ menu was empty after a reboot — and worse, could
+            // show (and rebuild with!) the previously scanned room's objects.
+            _objdb.loadBeside(path);
             _mesh_loaded = true; _rs = fit_to_canvas(_mesh, _cv_h, 0.7f);
             _rotation = VM3::rot_x(0.4f) * VM3::rot_y(0.6f); _state = VIEW;
             _reset_touch();
