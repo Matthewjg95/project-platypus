@@ -12,3 +12,6 @@ meshscan/unitv/build/
 
 # secrets — never commit
 **/wifi_creds.h
+
+# raw photo dumps stay local; only curated assets get committed
+assets/photos/raw/

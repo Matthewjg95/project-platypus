@@ -26,13 +26,19 @@ public:
         int16_t x, z;          // mesh model space (int16), floor plane
         int8_t  rssi;          // averaged dBm
         int8_t  rssi_min, rssi_max;
-        uint8_t antenna;       // 0=INT 1=EXT (reserved; INT-only for now)
+        uint8_t antenna;       // 0=INT 1=EXT
+        // Device bearing at capture, degrees, 0 = the mesh +Z axis (the
+        // direction faced at scan origin); -1 = unknown (legacy RFS2 file).
+        // REQUIRED for the external patch: a directional antenna's RSSI is a
+        // function of position AND aim, so a position-only sample is not a
+        // reproducible measurement. Omni (internal) samples ignore it.
+        int16_t heading;
     };
 
     // ---- data -----------------------------------------------------------
     void clear();
     bool add(int16_t x, int16_t z, int8_t rssi, int8_t mn, int8_t mx,
-             uint8_t antenna = 0);
+             uint8_t antenna = 0, int16_t heading = -1);
     int            count() const { return _count; }
     const Sample&  sample(int i) const { return _samples[i]; }
 

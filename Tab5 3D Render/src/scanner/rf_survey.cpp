@@ -4,10 +4,14 @@
 #include <string.h>
 #include <math.h>
 
-// On-disk (little-endian): "RFS2" | ssid[33] | bssid[6] | chan u8 | count u16
+// On-disk (little-endian): "RFS3" | ssid[33] | bssid[6] | chan u8 | count u16
 //                          | count * Sample{ i16 x, i16 z, i8 rssi, i8 min,
-//                                            i8 max, u8 antenna }
-static const char* MAGIC = "RFS2";
+//                                            i8 max, u8 antenna, i16 heading }
+// RFS2 is the same minus the trailing heading (8-byte records); it still
+// loads, with heading = -1 (unknown).
+static const char* MAGIC     = "RFS3";
+static const char* MAGIC_OLD = "RFS2";
+static const int   REC_V2    = 8;
 
 void RfSurvey::clear() {
     _count = 0;
@@ -18,9 +22,9 @@ void RfSurvey::clear() {
 }
 
 bool RfSurvey::add(int16_t x, int16_t z, int8_t rssi, int8_t mn, int8_t mx,
-                   uint8_t antenna) {
+                   uint8_t antenna, int16_t heading) {
     if (_count >= MAX_SAMPLES) return false;
-    _samples[_count++] = { x, z, rssi, mn, mx, antenna };
+    _samples[_count++] = { x, z, rssi, mn, mx, antenna, heading };
     return true;
 }
 
@@ -52,7 +56,11 @@ bool RfSurvey::loadBeside(const char* mesh_path) {
     File f = SD_MMC.open(p, FILE_READ);
     if (!f) return false;
     char magic[4];
-    bool ok = f.read((uint8_t*)magic, 4) == 4 && memcmp(magic, MAGIC, 4) == 0;
+    bool v3 = false, ok = f.read((uint8_t*)magic, 4) == 4;
+    if (ok) {
+        v3 = memcmp(magic, MAGIC, 4) == 0;
+        ok = v3 || memcmp(magic, MAGIC_OLD, 4) == 0;
+    }
     if (ok) {
         f.read((uint8_t*)ssid, 33); ssid[32] = '\0';
         f.read(bssid, 6);
@@ -60,9 +68,16 @@ bool RfSurvey::loadBeside(const char* mesh_path) {
         uint16_t n = 0;
         f.read((uint8_t*)&n, 2);
         if (n > MAX_SAMPLES) n = MAX_SAMPLES;
-        for (uint16_t i = 0; i < n; ++i)
-            if (f.read((uint8_t*)&_samples[i], sizeof(Sample)) == sizeof(Sample))
-                _count = i + 1;
+        for (uint16_t i = 0; i < n; ++i) {
+            if (v3) {
+                if (f.read((uint8_t*)&_samples[i], sizeof(Sample)) != (int)sizeof(Sample))
+                    break;
+            } else {                              // legacy: no heading field
+                if (f.read((uint8_t*)&_samples[i], REC_V2) != REC_V2) break;
+                _samples[i].heading = -1;
+            }
+            _count = i + 1;
+        }
     }
     f.close();
     return ok && _count > 0;

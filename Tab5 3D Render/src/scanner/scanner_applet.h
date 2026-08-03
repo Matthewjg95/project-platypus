@@ -158,7 +158,13 @@ public:
             case BROWSE: if (_need_redraw) _draw_browse(); break;
             case SCAN:   _draw_scan();  break;
             case VIEW:   _draw_view();  break;
-            case SURVEY: if (_rf_redraw) _draw_survey(); break;
+            case SURVEY:
+                if (_rf_redraw) _draw_survey();
+                else if (!_rf_picking) {          // live bearing readout
+                    static uint32_t lastb = 0;
+                    if (millis() - lastb >= 200) { lastb = millis(); _draw_bearing_row(); }
+                }
+                break;
             case LIVE:   _draw_live();  break;
             case MAP:    if (_map_dirty) _draw_map(); break;
         }
@@ -571,10 +577,8 @@ private:
         if (_walk) _path.add(0.0f, 0.0f);
         _fb.invalidateAll();          // never sample a previous scan's frame
         _scanning = true; _scan_start = millis(); _last_sample = 0; _last_seq = 0;
-        _yaw_rad = 0; _yaw_bias_dps = 0; _bias_sum = 0; _bias_n = 0;
-        _bias_min = 1e9f; _bias_max = -1e9f; _bias_t0 = millis();
-        _bias_locked = false;
-        _imu_last_ms = millis(); _last_decode_ms = 0; _last_decode_seq = 0;
+        _reset_yaw();
+        _last_decode_ms = 0; _last_decode_seq = 0;
         _state = SCAN;
         _reset_touch();
         _decode->fillSprite(TFT_BLACK);   // blank until the first frame decodes
@@ -635,6 +639,24 @@ private:
                               ui_theme::ACCENT);                    // you
     }
     void _abort_scan() { _scanning = false; }
+
+    // Restart yaw integration + stillness-locked bias. Used by scans AND by
+    // the RF survey, which needs a bearing for directional-antenna samples.
+    void _reset_yaw() {
+        _yaw_rad = 0; _yaw_bias_dps = 0; _bias_sum = 0; _bias_n = 0;
+        _bias_min = 1e9f; _bias_max = -1e9f; _bias_t0 = millis();
+        _bias_locked = false; _imu_last_ms = millis();
+    }
+
+    // Current bearing in degrees, 0 = mesh +Z (the direction faced at scan
+    // origin); -1 while the bias is still locking. Survey calibration asks
+    // the user to face the START arrow, which is what ties the two frames.
+    int16_t _hdg_deg() const {
+        if (!_bias_locked) return -1;
+        int v = (int)lroundf(_yaw_rad * 180.0f / (float)M_PI) % 360;
+        if (v < 0) v += 360;
+        return (int16_t)v;
+    }
 
     // World-vertical rotation rate in deg/s: gyro projected onto gravity.
     // Also stashes |accel| for the walk-scan step detector.
@@ -1782,6 +1804,7 @@ private:
         if (!_mesh_loaded) return;
         _state = SURVEY; _reset_touch();
         _rf_tap_set = false; _rf_last = 127;
+        _reset_yaw();          // bearing for directional (patch) samples
         _survey_bounds_from_mesh();
         M5.Display.fillRect(0, BAR_H, M5.Display.width(),
                             M5.Display.height() - BAR_H, COL_BG);
@@ -1900,6 +1923,7 @@ private:
     }
 
     bool _update_survey() {
+        _imu_tick(millis(), 0);      // live bearing (see _hdg_deg)
         if (M5.Touch.getCount() == 0) { _prev_touch = false; return true; }
         if (_prev_touch) return true;             // act on press edge
         _prev_touch = true;
@@ -1927,7 +1951,8 @@ private:
                     int8_t avg = _rf_measure(mn, mx);
                     _rf_last = avg;
                     if (avg != 127) {
-                        _rf.add(_rf_tap_x, _rf_tap_z, avg, mn, mx, _rf_ant);
+                        _rf.add(_rf_tap_x, _rf_tap_z, avg, mn, mx, _rf_ant,
+                                _hdg_deg());
                         _rf.computeGrid(_rf_bx0, _rf_bx1, _rf_bz0, _rf_bz1, _rf_ant);
                         _rf.saveBeside(_mesh_path);
                         ui_feedback::tick();               // sample landed
@@ -1955,6 +1980,29 @@ private:
             _rf_tap_set = true; _rf_redraw = true;
         }
         return true;
+    }
+
+    // Live bearing + calibration state. Repainted on its own throttle so the
+    // heading tracks the device without redrawing the whole survey.
+    void _draw_bearing_row() {
+        int dw = M5.Display.width();
+        int px = dw * 2 / 3 + 10, y = BAR_H + 108;
+        M5.Display.fillRect(px - 4, y - 2, dw - px, 40, COL_BG);
+        M5.Display.setTextSize(1);
+        int16_t h = _hdg_deg();
+        if (h < 0) {
+            M5.Display.setTextColor(0xFFE0, COL_BG);
+            M5.Display.setCursor(px, y);
+            M5.Display.print("face START arrow, hold still");
+        } else {
+            M5.Display.setTextColor(COL_TEXT, COL_BG);
+            M5.Display.setCursor(px, y);
+            M5.Display.printf("aim: %3d deg", (int)h);
+            M5.Display.setTextColor(_rf_ant ? 0x07FF : COL_SUBTEXT, COL_BG);
+            M5.Display.setCursor(px, y + 16);
+            M5.Display.print(_rf_ant ? "patch: AIM AT AP before sampling"
+                                     : "omni: aim does not matter");
+        }
     }
 
     void _draw_survey() {
@@ -1999,6 +2047,49 @@ private:
             int sy = _pl_y + (int32_t)(sp.z - _rf_bz0) * _pl_h / (_rf_bz1 - _rf_bz0);
             M5.Display.fillCircle(sx, sy, 8, RfSurvey::colorFor(sp.rssi));
             M5.Display.drawCircle(sx, sy, 8, TFT_BLACK);
+            // Aim tick: which way the device faced. For the patch this is
+            // half the measurement — a sample without it isn't reproducible.
+            if (sp.heading >= 0) {
+                float a = sp.heading * (float)M_PI / 180.0f;
+                M5.Display.drawLine(sx, sy,
+                    sx + (int)(sinf(a) * 16.0f), sy + (int)(cosf(a) * 16.0f),
+                    TFT_WHITE);
+            }
+        }
+        // ---- AP direction from the patch ---------------------------------
+        // A directional antenna reads strongest when aimed at the source, so
+        // the best EXT sample's own bearing is an estimate of where the AP
+        // is. Drawn as a ray from that sample. (Indoor multipath makes this
+        // approximate — it is labelled as an estimate, not a fix.)
+        if (_rf_ant == 1) {
+            int best = -1;
+            for (int i = 0; i < _rf.count(); ++i) {
+                const RfSurvey::Sample& s = _rf.sample(i);
+                if (s.antenna != 1 || s.heading < 0) continue;
+                if (best < 0 || s.rssi > _rf.sample(best).rssi) best = i;
+            }
+            if (best >= 0) {
+                const RfSurvey::Sample& s = _rf.sample(best);
+                float a  = s.heading * (float)M_PI / 180.0f;
+                float ux = sinf(a) * (float)_pl_w / (float)(_rf_bx1 - _rf_bx0);
+                float uz = cosf(a) * (float)_pl_h / (float)(_rf_bz1 - _rf_bz0);
+                float n  = sqrtf(ux*ux + uz*uz);
+                if (n > 0.001f) {
+                    ux /= n; uz /= n;
+                    float fx = (float)(_pl_x + (int32_t)(s.x - _rf_bx0) * _pl_w / (_rf_bx1 - _rf_bx0));
+                    float fy = (float)(_pl_y + (int32_t)(s.z - _rf_bz0) * _pl_h / (_rf_bz1 - _rf_bz0));
+                    float ex = fx, ey = fy;
+                    while (ex + ux >= _pl_x && ex + ux < _pl_x + _pl_w &&
+                           ey + uz >= _pl_y && ey + uz < _pl_y + _pl_h) {
+                        ex += ux; ey += uz;
+                    }
+                    M5.Display.drawLine((int)fx, (int)fy, (int)ex, (int)ey, 0x07FF);
+                    M5.Display.setTextSize(1);
+                    M5.Display.setTextColor(0x07FF);
+                    M5.Display.setCursor((int)ex - 60, (int)ey - 12);
+                    M5.Display.print("AP this way?");
+                }
+            }
         }
         // dead-zone / best-spot callouts: worst and best interpolated cells.
         // This is the practical payoff of the whole survey — "put the router
@@ -2052,6 +2143,7 @@ private:
         M5.Display.setCursor(px, py + 66);
         if (_rf_last != 127) M5.Display.printf("%d dBm", (int)_rf_last);
         else                 M5.Display.print("-- dBm");
+        _draw_bearing_row();
 
         int by = BAR_H + 150;
         M5.Display.fillRoundRect(px, by, dw - px - 12, 56, 6, 0x2945);
