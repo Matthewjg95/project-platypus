@@ -101,12 +101,16 @@ bool ProjectManager::deleteRoom(const char* building, const char* room) {
     char path[200];
     if (!meshPath(building, room, path, sizeof(path))) return false;
     bool ok = SD_MMC.remove(path);
-    // remove sidecars too (.lbl labels, .rf survey, .objs database)
+    // Remove sidecars too (.lbl labels, .rf survey, .objs database, .path
+    // walk trail). Room names RECYCLE (suggestRoomName reuses freed numbers),
+    // so any sidecar left behind gets inherited by a future room of the same
+    // name — a stale .path would stamp a dead room's walk into a new carve.
     char* dot = strrchr(path, '.');
     if (dot) {
         strcpy(dot, ".lbl");  SD_MMC.remove(path);
         strcpy(dot, ".rf");   SD_MMC.remove(path);
         strcpy(dot, ".objs"); SD_MMC.remove(path);
+        strcpy(dot, ".path"); SD_MMC.remove(path);
     }
     return ok;
 }

@@ -1524,8 +1524,8 @@ private:
             tdb.loadBeside(mp);                  // empty db is fine
             tpath.clear(); tpath.loadBeside(mp);
             MapRoom& m = _map_rooms[_map_n];
+            memset(m.name, 0, PM_MAX_NAME);   // full buffer is written to SD
             strncpy(m.name, _rooms[r].c_str(), PM_MAX_NAME - 1);
-            m.name[PM_MAX_NAME - 1] = '\0';
             for (int i = 0; i < tdb.count; ++i)
                 tshown[i] = ((tdb.objs[i].flags & ROBJ_VISIBLE) &&
                              tdb.objs[i].n >= _min_obs(tdb.objs[i].cls)) ? 1 : 0;
