@@ -9,15 +9,39 @@
 //                                            i8 max, u8 antenna, i16 heading }
 // RFS2 is the same minus the trailing heading (8-byte records); it still
 // loads, with heading = -1 (unknown).
-static const char* MAGIC     = "RFS3";
-static const char* MAGIC_OLD = "RFS2";
-static const int   REC_V2    = 8;
+// RFS4 adds the capture quantisation (qc[3], qs) after `channel`, so samples
+// can be remapped when a room's mesh bounds change. RFS3 = same records, no
+// quantisation. RFS2 = 8-byte records (no heading). All three still load.
+static const char* MAGIC    = "RFS4";
+static const char* MAGIC_V3 = "RFS3";
+static const char* MAGIC_V2 = "RFS2";
+static const int   REC_V2   = 8;
+
+void RfSurvey::remap(const float new_c[3], float new_s) {
+    if (!hasQuant() || new_s <= 0.0f) {         // nothing to convert from/to
+        qc[0] = new_c[0]; qc[1] = new_c[1]; qc[2] = new_c[2]; qs = new_s;
+        return;
+    }
+    if (fabsf(new_s - qs) < 1e-6f &&
+        fabsf(new_c[0] - qc[0]) < 1e-6f && fabsf(new_c[2] - qc[2]) < 1e-6f)
+        return;                                  // unchanged: leave samples be
+    for (int i = 0; i < _count; ++i) {
+        float wx = _samples[i].x / qs + qc[0];   // mesh -> world metres
+        float wz = _samples[i].z / qs + qc[2];
+        long nx = lroundf((wx - new_c[0]) * new_s);   // world -> new mesh
+        long nz = lroundf((wz - new_c[2]) * new_s);
+        _samples[i].x = (int16_t)(nx >  32767 ?  32767 : nx < -32767 ? -32767 : nx);
+        _samples[i].z = (int16_t)(nz >  32767 ?  32767 : nz < -32767 ? -32767 : nz);
+    }
+    qc[0] = new_c[0]; qc[1] = new_c[1]; qc[2] = new_c[2]; qs = new_s;
+}
 
 void RfSurvey::clear() {
     _count = 0;
     ssid[0] = '\0';
     memset(bssid, 0, sizeof(bssid));
     channel = 0;
+    qc[0] = qc[1] = qc[2] = 0.0f; qs = 0.0f;
     memset(_grid, 127, sizeof(_grid));
 }
 
@@ -42,6 +66,8 @@ bool RfSurvey::saveBeside(const char* mesh_path) {
     f.write((const uint8_t*)ssid, 33);
     f.write(bssid, 6);
     f.write(&channel, 1);
+    f.write((const uint8_t*)qc, 12);
+    f.write((const uint8_t*)&qs, 4);
     uint16_t n = (uint16_t)_count;
     f.write((const uint8_t*)&n, 2);
     for (int i = 0; i < _count; ++i)
@@ -56,20 +82,22 @@ bool RfSurvey::loadBeside(const char* mesh_path) {
     File f = SD_MMC.open(p, FILE_READ);
     if (!f) return false;
     char magic[4];
-    bool v3 = false, ok = f.read((uint8_t*)magic, 4) == 4;
+    bool v4 = false, v3 = false, ok = f.read((uint8_t*)magic, 4) == 4;
     if (ok) {
-        v3 = memcmp(magic, MAGIC, 4) == 0;
-        ok = v3 || memcmp(magic, MAGIC_OLD, 4) == 0;
+        v4 = memcmp(magic, MAGIC,    4) == 0;
+        v3 = memcmp(magic, MAGIC_V3, 4) == 0;
+        ok = v4 || v3 || memcmp(magic, MAGIC_V2, 4) == 0;
     }
     if (ok) {
         f.read((uint8_t*)ssid, 33); ssid[32] = '\0';
         f.read(bssid, 6);
         f.read(&channel, 1);
+        if (v4) { f.read((uint8_t*)qc, 12); f.read((uint8_t*)&qs, 4); }
         uint16_t n = 0;
         f.read((uint8_t*)&n, 2);
         if (n > MAX_SAMPLES) n = MAX_SAMPLES;
         for (uint16_t i = 0; i < n; ++i) {
-            if (v3) {
+            if (v4 || v3) {
                 if (f.read((uint8_t*)&_samples[i], sizeof(Sample)) != (int)sizeof(Sample))
                     break;
             } else {                              // legacy: no heading field

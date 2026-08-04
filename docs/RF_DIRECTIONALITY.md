@@ -42,7 +42,7 @@ measures reach in a direction — and it can point back at the router."*
 
 ---
 
-## Next: fuse RF sampling into WALK+ (post-contest)
+## Walk-fused survey — SHIPPED
 
 **The idea (Matt's):** WALK+ already tracks pose and heading while you walk
 the room. Sample RSSI during that same walk and one pass produces the room
@@ -66,37 +66,50 @@ product of walking rather than a separate procedure.
 - WiFi must be brought up inside the scanner (`_wifi_up()`), and a target AP
   must already be chosen (the global saved AP). No AP → skip silently.
 
-### The coordinate problem (must be solved first)
+### The coordinate problem (solved)
 
 RF samples are stored in **quantised mesh space**, but during a walk the
 final mesh doesn't exist yet — quantisation is computed at write time from
-the finished geometry. Two consequences:
+the finished geometry. And worse, a *pre-existing bug*: any rebuild that
+changed the geometry bounds (hiding an object via the OBJ menu, a WALK+ that
+grew the room) changed the quantisation, and existing samples — stored in
+the *old* mesh space — silently slid relative to the new floor.
 
-1. Walk-collected samples must be buffered in **world metres** and converted
-   at `_write_phase1`, after `ScanMeshWriter::quantisation()` runs.
-2. **Known issue, present today:** any rebuild that changes the geometry
-   bounds (hiding an outlying object via the OBJ menu, or a WALK+/SCAN+ that
-   grows the room) changes the quantisation — and existing `.rf` samples,
-   stored in the *old* mesh space, silently shift relative to the new mesh.
-   *Demo workaround: settle the object list before surveying a room.*
+**Fix: `.rf` files now record the quantisation their samples were captured
+under** (`qc[3]`, `qs`, format `RFS4`). On every rebuild the survey is
+reloaded, `remap()`ed from the old quantisation to the new one, and saved.
+The heatmap stays glued to the floor no matter how the room is edited. Files
+without the field (`RFS2`/`RFS3`) load and adopt the current quantisation,
+i.e. exactly today's behaviour, no worse.
 
-**The fix for both: store RF samples in world metres** (`RFS4`), converting
-to mesh space only at draw time. That single change removes the shift bug
-and unblocks walk fusion, since walk samples are natively in world metres.
-Do this first, then the fusion is mostly plumbing.
+That same machinery makes walk fusion trivial: walk samples buffer in world
+metres and convert once, at the same moment.
 
-### Sketch
+### How it works now
 
-```
-_walk_rf_tick():                    # every ~1.5s during WALK+
-    if !_walk or no target AP: return
-    rssi = single-channel scan burst (dwell 60)
-    buffer (pose.x, pose.z, heading, rssi, antenna)
+- **Walk start:** if the room (or the saved global pick) has a target AP,
+  WiFi comes up, the RF switch is set to the selected antenna, and the walk
+  becomes a survey. No AP → skipped silently, walk behaves as before.
+- **During the walk:** every 1.5 s, one single-channel scan at 60 ms dwell
+  reads the target AP; the reading is buffered with the current pose and
+  bearing. The mini-map drops a dot coloured by signal strength at each
+  sample, so the heatmap visibly builds itself as you walk. The status line
+  shows `Walk 12 st 8.4m | EXT RF:6 -58 dBm`.
+- **At FINISH:** buffered samples convert world → mesh with the final
+  quantisation and merge into the room's `.rf`, alongside anything sampled
+  by hand.
 
-_write_phase1():                    # after quantisation is known
-    for each buffered sample: world -> mesh, _rf.add(...)
-    _rf.saveBeside(path)
-```
+### Demo consequence
 
-With RFS4 world-metre storage the conversion disappears entirely and the
-buffer can write straight through.
+The survey no longer requires tap-position-then-tap-sample. **One walk
+produces the room and the heatmap together** — and because every sample
+carries its bearing, the patch antenna's directionality is captured for
+free. To survey with the patch: pick EXT in the RF screen once, then WALK+.
+
+### Still worth doing later
+
+- Choose the antenna directly from the walk screen (today it inherits the
+  RF screen's selection — the HUD shows which, so it is unambiguous, just
+  not adjustable in place).
+- Multi-position bearing intersection for a true AP *fix* rather than a
+  single-ray estimate.

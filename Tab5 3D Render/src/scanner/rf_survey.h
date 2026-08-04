@@ -47,6 +47,20 @@ public:
     uint8_t bssid[6] = {0};
     uint8_t channel  = 0;
 
+    // The mesh quantisation these samples were captured under (world metres
+    // -> int16: q = (v - qc) * qs). Samples live in mesh space, but a room's
+    // quantisation CHANGES whenever a rebuild alters its bounds (hiding an
+    // object, a WALK+ that grows the room) — which silently slid the whole
+    // heatmap relative to the floor. Storing it lets us remap instead.
+    // qs == 0 means "unknown" (legacy file): nothing to remap against.
+    float qc[3] = {0, 0, 0};
+    float qs    = 0.0f;
+    bool  hasQuant() const { return qs > 0.0f; }
+
+    // Re-express every sample in a new quantisation. No-op if we never knew
+    // the old one.
+    void remap(const float new_c[3], float new_s);
+
     // ---- persistence: "<room>.rf" beside "<room>.mesh" ------------------
     bool saveBeside(const char* mesh_path);
     bool loadBeside(const char* mesh_path);      // false if absent/invalid

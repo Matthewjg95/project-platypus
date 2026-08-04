@@ -256,6 +256,20 @@ private:
     bool        _walk = false;
     int         _path_drawn = -1;      // mini-map redraw tracking
     int         _path_scan_start = 0;  // first path index from the current scan
+
+    // ---- walk-fused RF survey -------------------------------------------
+    // One walk produces the room AND the heatmap: while WALK+ tracks pose, we
+    // also sample the target AP. Samples buffer in WORLD METRES because the
+    // mesh's quantisation isn't known until the geometry is written; they are
+    // converted in _rebuild_from_db once it is. A single-channel scan at 60ms
+    // dwell blocks ~100ms, under the IMU tick's 250ms staleness guard, so at
+    // a 1.5s cadence (~7% duty) yaw tracking and the camera UART both survive.
+    struct WalkRf { float x, z; int8_t rssi; int16_t hdg; uint8_t ant; };
+    WalkRf   _wrf[64]; int _wrf_n = 0;
+    uint32_t _wrf_last = 0;
+    bool     _wrf_on = false;          // AP known + WiFi up for this walk
+    int8_t   _wrf_show = 127;          // last reading, for the walk HUD
+    static const uint32_t WALK_RF_MS = 1500;
     uint8_t _gray[160*120];
 
     // ====================================================
@@ -575,6 +589,20 @@ private:
         // same registration transform as the objects at write time.
         _path_scan_start = _path.count;
         if (_walk) _path.add(0.0f, 0.0f);
+        // Walk doubles as an RF survey when a target AP is already known
+        // (this room's, or the saved global pick). No AP -> silently skip.
+        _wrf_n = 0; _wrf_last = 0; _wrf_show = 127; _wrf_on = false;
+        if (_walk) {
+            if (_rf.ssid[0] == '\0') _load_saved_ap();
+            if (_rf.ssid[0] && _rf.channel >= 1) {
+                _wifi_up();
+                rf_switch::init();
+                rf_switch::setExternal(_rf_ant == 1);
+                _wrf_on = true;
+                Serial.printf("[walk-rf] surveying '%s' ch%d ant=%s\n",
+                              _rf.ssid, _rf.channel, _rf_ant ? "EXT" : "INT");
+            }
+        }
         _fb.invalidateAll();          // never sample a previous scan's frame
         _scanning = true; _scan_start = millis(); _last_sample = 0; _last_seq = 0;
         _reset_yaw();
@@ -603,6 +631,25 @@ private:
         _ring_deg = 0;             // progress arc redraws from zero next frame
         _preview_dirty = true;     // preview re-pushes next decode/frame
         _path_drawn = -1;          // walk mini-map repaints next frame
+    }
+
+    // One fast single-channel reading of the target AP at the current pose.
+    // Deliberately ONE burst at 60ms dwell (the antenna suite's cadence) —
+    // the survey's 2x120ms burst would block long enough to stall the IMU.
+    void _walk_rf_sample() {
+        if (_wrf_n >= 64) return;
+        int n = WiFi.scanNetworks(false, false, false, 60, _rf.channel);
+        int8_t r = 127;
+        for (int i = 0; i < n; ++i)
+            if (memcmp(WiFi.BSSID(i), _rf.bssid, 6) == 0) {
+                r = (int8_t)WiFi.RSSI(i);
+                break;
+            }
+        WiFi.scanDelete();
+        if (r == 127) return;                      // AP not heard this burst
+        _wrf_show = r;
+        _wrf[_wrf_n++] = { _pose.x(), _pose.z(), r, _hdg_deg(), _rf_ant };
+        _path_drawn = -1;                          // repaint the mini-map
     }
 
     // Walk-scan mini-map: the dead-reckoned path traced live in a corner
@@ -634,6 +681,11 @@ private:
                                 sx(_path.x(i)),   sy(_path.z(i)),
                                 i >= _path_scan_start ? ui_theme::ACCENT
                                                       : ui_theme::SURFACE_2);
+        // RF samples dropped along the walk, coloured by signal strength —
+        // the heatmap building itself as you move.
+        for (int i = 0; i < _wrf_n; ++i)
+            M5.Display.fillCircle(sx(_wrf[i].x), sy(_wrf[i].z), 4,
+                                  RfSurvey::colorFor(_wrf[i].rssi));
         M5.Display.fillCircle(sx(0), sy(0), 4, TFT_WHITE);          // origin
         M5.Display.fillCircle(sx(_pose.x()), sy(_pose.z()), 5,
                               ui_theme::ACCENT);                    // you
@@ -852,6 +904,11 @@ private:
         if (_walk && _bias_locked &&
             _pose.tick(_imu_amag, _yaw_rad, now))
             _path.add(_pose.x(), _pose.z());
+        // ...and sample the AP as you go (see WalkRf)
+        if (_walk && _wrf_on && _bias_locked && now - _wrf_last >= WALK_RF_MS) {
+            _wrf_last = now;
+            _walk_rf_sample();
+        }
         // Finish on a completed 360-degree sweep (measured, not assumed) or
         // when the user taps FINISH. Walk scans have no natural end — the
         // FINISH button is the only exit. No timeout either way.
@@ -962,6 +1019,11 @@ private:
         M5.Display.setCursor(12, BAR_H + 490);
         if (!_bias_locked)
             M5.Display.print("Face a corner, hold still...  ");
+        else if (_walk && _wrf_on)
+            M5.Display.printf("Walk %d st %.1fm | %s RF:%d %d dBm  ",
+                              _pose.steps(), _pose.distance(),
+                              _rf_ant ? "EXT" : "INT", _wrf_n,
+                              _wrf_show == 127 ? 0 : (int)_wrf_show);
         else if (_walk)
             M5.Display.printf("Walk: %d steps  %.1fm       ",
                               _pose.steps(), _pose.distance());
@@ -1105,6 +1167,35 @@ private:
             Serial.printf("[scanner] WARN: .objs save FAILED for %s\n", path);
 
         float c[3], s; ScanMeshWriter::quantisation(_geom.bounds(), c, s);
+
+        // ---- RF survey: keep the heatmap glued to the floor --------------
+        // Samples are stored in mesh space, and this rebuild may have moved
+        // the quantisation (bounds changed), which used to slide the whole
+        // heatmap. Reload from disk (authoritative), remap to the NEW
+        // quantisation, then fold in anything this walk measured.
+        if (_rf.count() > 0 || _wrf_n > 0 || SD_MMC.exists(path)) {
+            char sv_ssid[33]; uint8_t sv_bssid[6], sv_ch;
+            memcpy(sv_ssid, _rf.ssid, 33);
+            memcpy(sv_bssid, _rf.bssid, 6);
+            sv_ch = _rf.channel;
+            if (!_rf.loadBeside(path)) {          // no survey yet: keep the AP
+                _rf.clear();
+                memcpy(_rf.ssid, sv_ssid, 33);
+                memcpy(_rf.bssid, sv_bssid, 6);
+                _rf.channel = sv_ch;
+            }
+            _rf.remap(c, s);
+            for (int i = 0; i < _wrf_n; ++i) {    // world metres -> mesh space
+                long mx = lroundf((_wrf[i].x - c[0]) * s);
+                long mz = lroundf((_wrf[i].z - c[2]) * s);
+                if (mx < -32767 || mx > 32767 || mz < -32767 || mz > 32767) continue;
+                _rf.add((int16_t)mx, (int16_t)mz, _wrf[i].rssi,
+                        _wrf[i].rssi, _wrf[i].rssi, _wrf[i].ant, _wrf[i].hdg);
+            }
+            if (_wrf_n) Serial.printf("[walk-rf] +%d samples -> survey\n", _wrf_n);
+            if (_rf.count() > 0) _rf.saveBeside(path);
+            _wrf_n = 0;
+        }
         static ScanMeshWriter w;      // static: its 4KB buffer overflowed the
                                       // 8KB loop stack (intermittent finish crash)
         if (!w.begin(path, c, s)) return false;
