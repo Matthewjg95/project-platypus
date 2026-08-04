@@ -230,13 +230,16 @@ static void draw_status_chip(bool at_home) {
         snprintf(buf, sizeof(buf), "OTA ready  %s", WiFi.localIP().toString().c_str());
         txt = buf;
     }
+    // Top-right of the header bar. It used to sit at the bottom, where it
+    // overlapped the tiles — visible clutter in the first frame of the demo.
+    (void)h;
     int w = M5.Display.width();
-    M5.Display.fillRoundRect(w - 312, h - 34, 300, 26, 5, col);   // bottom-right, clear of tiles
-    ui_icons::wifi(&M5.Display, w - 294, h - 16, 18, TFT_WHITE);
+    M5.Display.fillRoundRect(w - 312, 17, 300, 26, 5, col);
+    ui_icons::wifi(&M5.Display, w - 294, 30, 18, TFT_WHITE);
     M5.Display.setFont(&fonts::Font0);
     M5.Display.setTextSize(1);
     M5.Display.setTextColor(TFT_WHITE, col);
-    M5.Display.setCursor(w - 278, h - 26);
+    M5.Display.setCursor(w - 278, 25);
     M5.Display.print(txt);
 }
 

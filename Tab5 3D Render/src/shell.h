@@ -359,7 +359,10 @@ private:
 
             // vector glyph chosen by applet name (shell stays type-agnostic)
             const char* lbl = _applets[i]->name();
-            int icx = tx + tw/2, icy = ty + th/2 - 24, isz = 84;
+            // Glyph scales with tile height: 84px was sized for the old 2-row
+            // grid and looked lost in a full-height tile.
+            int isz = th > 400 ? 150 : 84;
+            int icx = tx + tw/2, icy = ty + th/2 - 24;
             if      (strstr(lbl, "View"))    ui_icons::cube (&M5.Display, icx, icy, isz, COL_TEXT);
             else if (strstr(lbl, "Scan"))    ui_icons::radar(&M5.Display, icx, icy, isz, COL_TEXT);
             else if (strstr(lbl, "Antenna")) ui_icons::mast (&M5.Display, icx, icy, isz, COL_TEXT);
