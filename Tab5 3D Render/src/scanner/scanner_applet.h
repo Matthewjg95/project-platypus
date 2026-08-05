@@ -1018,7 +1018,11 @@ private:
         M5.Display.setTextColor(COL_TEXT, COL_BG); M5.Display.setTextSize(2);
         M5.Display.setCursor(12, BAR_H + 490);
         if (!_bias_locked)
-            M5.Display.print("Face a corner, hold still...  ");
+            // The corner ritual belongs to a room's FIRST sweep only (it
+            // defines the origin). SCAN+/WALK+ start anywhere — registration
+            // finds the frame — so telling them "face a corner" was wrong.
+            M5.Display.print(_additive ? "Hold still a moment...        "
+                                       : "Face a corner, hold still...  ");
         else if (_walk && _wrf_on)
             M5.Display.printf("Walk %d st %.1fm | %s RF:%d %d dBm  ",
                               _pose.steps(), _pose.distance(),
