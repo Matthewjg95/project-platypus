@@ -7,7 +7,10 @@ custom patch antenna PCB. No imported floor plans anywhere in the loop: the
 instrument draws its own.
 
 Built for the **M5Stack Global Innovation Contest 2026**, as an exercise in
-pushing the Tab5 (ESP32-P4) and friends to their limits.
+pushing the Tab5 (ESP32-P4) and friends to their limits — and, at roughly
+$110 of parts, an accidental RF classroom: aim the patch antenna and watch
+directionality appear on the map; swap in an antenna you made and the
+instrument tells you if it's better.
 
 ```
 ┌─────────────────────────────  M5View shell  ─────────────────────────────┐
