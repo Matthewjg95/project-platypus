@@ -71,7 +71,7 @@ public:
 
     static void removeBeside(const char* mesh_path) {
         char p[208]; _path(mesh_path, p, sizeof(p));
-        SD_MMC.remove(p);
+        if (SD_MMC.exists(p)) SD_MMC.remove(p);   // quiet: no vfs error spam
     }
 
 private:

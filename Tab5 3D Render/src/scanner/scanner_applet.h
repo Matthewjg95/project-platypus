@@ -763,7 +763,9 @@ private:
         // sightings of the SAME object past the sweep radius, fragmenting
         // them into 1-observation entries that never reach MIN_OBSERVATIONS
         // ("walk finds fewer objects" field report).
-        float r2 = _walk ? 1.21f : 0.36f;    // 1.1m vs 0.6m radius
+        float r2 = _walk ? 1.21f : 0.64f;    // 1.1m walk vs 0.8m sweep radius
+        // (sweep was 0.6m; low-conf box jitter fragmented same-object
+        // sightings into separate never-confirmed entries — see ACC_CONF)
         for (int i = 0; i < _acc_n; ++i)
             if (_acc[i].cls == cls) {
                 float dx=_acc[i].x-e.x, dz=_acc[i].z-e.z;
@@ -802,9 +804,11 @@ private:
     // missing real furniture. 16 admits nearly everything the camera reports
     // — the real vetting is spatial (MIN_OBSERVATIONS same-cell sightings),
     // positional (median-of-9), and the box sanity gates in the estimator.
-    // (16 -> 14 in the +15% sensitivity pass; the camera itself only sends
-    // conf >= 15, so the effective floor is now the camera's own threshold)
-    static const uint8_t ACC_CONF     = 14;
+    // Field-tuned. 14 (the +15% pass) admitted junk boxes whose ranging
+    // jitter scattered repeat sightings >0.6m apart — a live scan logged
+    // "17 objects, 0 confirmed": fragments everywhere, no clusters. 16 keeps
+    // the floor low; the fragmentation fix is the wider sweep merge radius.
+    static const uint8_t ACC_CONF     = 16;
 
     // Per-class strictness: VOC "person" is the model's most trigger-happy
     // class (a live scan mapped half a room as people). It has to clear a
