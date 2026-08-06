@@ -1,15 +1,15 @@
 # RF Survey — WiFi Heatmap on a Self-Scanned Room
 
-> **STATUS (2026-07-21): MVP IMPLEMENTED & FLASHED, awaiting hardware test.**
-> `src/scanner/rf_survey.h/.cpp` + SURVEY state in `scanner_applet.h`
-> ([RF] button in the 3D view). Implementation deviations from this spec:
-> samples are stored in the mesh's **int16 model space** (like the .lbl
-> sidecar), not metres — the IDW "no data" cutoff is 20% of the room diagonal;
-> file magic is **RFS2** with the mesh-space layout; AP selection is
-> **auto-strongest** (picker UI deferred); INT/EXT dual-antenna layers
-> deferred (antenna field reserved in the format). Untested on hardware:
-> WiFi bring-up inside the scanner applet, SD write during survey, and
-> C6-link sharing if the antenna applet ran first in the same boot.
+> **STATUS: historical design document.** The survey shipped, evolved past
+> this spec, and `src/scanner/rf_survey.h/.cpp` is the source of truth. What
+> changed since this was written: samples live in the mesh's **int16 model
+> space** with the capture quantisation recorded so rebuilds remap them
+> (format **RFS4**); every sample records the device **bearing** (the
+> external patch antenna's RSSI depends on aim as much as position); INT/EXT
+> antennas are separate flippable heat layers with DEAD/BEST callouts and a
+> legend; the AP picker is a real UI with a persisted global choice; and
+> **WALK+ fuses surveying into walking** — pose-tracked samples collect
+> automatically during a walk scan. Kept for the original design rationale.
 
 The Project Platypus fusion feature and contest centerpiece: scan a room into a
 3D mesh (Room Scan), then walk the room sampling WiFi RSSI and paint the signal

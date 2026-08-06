@@ -1,22 +1,10 @@
-# M5Stack Tab5 — Portable 3D Mesh Viewer
-## Engineering Reference
+# Renderer Internals
 
----
-
-## Project Structure
-
-```
-m5viewer/
-├── platformio.ini          — Build system config
-├── src/
-│   ├── main.cpp            — App entry point & render loop
-│   ├── mesh.h              — Data structures (Vertex, Face, Mesh, RenderState)
-│   ├── mesh_loader.h       — SD card binary .mesh loader
-│   ├── renderer.h          — Full 3D pipeline (transform → cull → project → rasterise)
-│   └── input.h             — Touch drag input handler
-└── tools/
-    └── stl_to_mesh.py      — Offline STL → .mesh converter
-```
+> Engineering reference for the software 3D renderer shared by the Viewer and
+> Room Scan applets. Written for the original standalone viewer; the pipeline
+> documented here is unchanged, now living at `src/mesh.h`, `src/mesh_loader.h`
+> and `src/renderer.h` inside the M5View shell. Structure/roadmap sections
+> below reflect the original project and are kept for reference.
 
 ---
 
@@ -108,15 +96,15 @@ Pipeline steps:
 
 Key bottleneck: `fillTriangle()` in M5GFX.  Each call involves SPI/parallel bus writes proportional to triangle screen area.
 
-### input.h
+### Touch input
 
-`InputHandler::update()` → `InputDelta { dx, dy, active }`
+(The original `input.h` handler; the applets now poll `M5.Touch` directly
+with the same approach.)
 
 - Polls `M5.Touch.getDetail()` each frame.
 - Tracks previous touch position across frames.
-- Applies 2-pixel deadzone to suppress jitter.
-- Returns pixel deltas; caller multiplies by `DRAG_SENSITIVITY`
-  (0.005 rad/px by default) to get rotation delta.
+- Applies a small deadzone to suppress jitter.
+- Pixel deltas × `DRAG_SENSITIVITY` (0.005 rad/px) → rotation delta.
 
 ---
 
@@ -281,7 +269,7 @@ print(f"Expected size: {expected}  Actual: {len(data)}  {'OK' if len(data)==expe
 | 3 | Touch rotation + zoom | ✅ Implemented |
 | 4 | Z-sort, DMA, SIMD optimisation | 🔲 Planned |
 | 5 | Lighting, Z-buffer, measurements | 🔲 Planned |
-| 6 | Joystick navigation | 🔲 Designed (stub in input.h) |
+| 6 | Joystick navigation | 🔲 Designed (driver present, disabled) |
 | 7 | Vertex selection, annotations | 🔲 Future |
 
 ---

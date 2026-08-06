@@ -15,3 +15,6 @@ meshscan/unitv/build/
 
 # raw photo dumps stay local; only curated assets get committed
 assets/photos/raw/
+
+# internal working notes (kept local + in platypus-lab history, not in the contest repo)
+notes/

@@ -12,7 +12,6 @@ Status as of 2026-06-16. Firmware is flashed and running on the Tab5 (COM6).
 screen → reboot → back to M5View home).
 
 ## Root cause (confirmed from serial)
-Raw log: [`antenna-wifi-crash.log`](antenna-wifi-crash.log).
 
 The app reaches `on_enter` (`[ANT] 1280x720`) then dies bringing up WiFi:
 
