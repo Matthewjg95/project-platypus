@@ -82,6 +82,11 @@ assets/                  build photos + device screenshots
 
 ## Building & flashing
 
+**Start here: [docs/BUILD_GUIDE.md](docs/BUILD_GUIDE.md)** — desktop
+prerequisites → assembly → camera flash → Tab5 flash → first scan, with a
+troubleshooting table. **[docs/CODE_TOUR.md](docs/CODE_TOUR.md)** is a
+guided reading order for the source. The short version:
+
 **Tab5** (PlatformIO):
 ```bash
 cd "Tab5 3D Render"
