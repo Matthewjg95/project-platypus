@@ -93,6 +93,33 @@ isolated in `src/scanner/tof_ranger.h`.
 
 ---
 
+## Beyond the ToF: the M5-Bus as an expansion backbone
+
+The ToF finding generalizes. The camera owns the Grove port's pins as UART —
+but the M5-Bus header exposes the **internal I2C bus (SDA G31 / SCL G32)**,
+and I2C is a *bus*: every additional I2C peripheral shares those two pins,
+distinguished by address. Current occupants: 0x10, 0x14/0x55, 0x32, 0x40,
+0x41, 0x43, 0x44, 0x68. That leaves room for:
+
+| Peripheral | Address | Status |
+|---|---|---|
+| ToF ranger (VL53L1X) | 0x29 | free — this doc's plan |
+| M5 Joystick unit | 0x63 | free — **the driver already sits in-tree**
+  (`src/joystick_input.h`), disabled since the joystick was unplugged from
+  the camera's UART pins; it wires straight back up here |
+| Any Grove I2C unit (env sensors, encoders, …) | varies | check the map |
+
+The M5-Bus also carries SPI, UART0, RS485, and ~13 free GPIOs for
+peripherals that aren't I2C.
+
+**The physical layer — "Design B":** Grove pigtails onto header pins work
+for one device but not for a rig. The clean answer is a small custom
+breakout PCB — M5-Bus header in, 3-4 Grove (HY2.0-4P) jacks out, all
+sharing the internal I2C + power. The antenna fab run cost $40 for 45
+boards; an expansion breakout is the same order of trivial. One board turns
+the Tab5's back into a proper peripheral bay — which is exactly what the
+enclosure below should assume.
+
 ## Enclosure (next phase)
 
 Once camera + ToF + Tab5 travel together, a 3D-printed bracket becomes the

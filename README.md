@@ -151,7 +151,10 @@ python unitv_upload.py ../unitv/build/boot.py /flash/boot.py COM10
 Measured wall polygons via a ToF ranger on the M5-Bus I2C (the sweep dial
 becomes a live floor-plan radar — see `docs/TOF_RANGING.md`), a custom
 detection model with door/window classes (`docs/CUSTOM_MODEL_WALKTHROUGH.md`),
-Phase-2 SfM walls, and a printed enclosure with a swappable sensor pod.
+Phase-2 SfM walls, an M5-Bus expansion breakout PCB ("Design B": one small
+board fans the internal I2C out to Grove jacks — ToF at 0x29, the joystick
+at 0x63 whose driver already waits in-tree, and friends), and a printed
+enclosure with a peripheral bay + swappable sensor pod to house it all.
 
 ---
 *Built collaboratively with Claude (Anthropic) driving firmware, debugging,
