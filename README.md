@@ -8,9 +8,11 @@ instrument draws its own.
 
 Built for the **M5Stack Global Innovation Contest 2026**, as an exercise in
 pushing the Tab5 (ESP32-P4) and friends to their limits — and, at roughly
-$110 of parts, an accidental RF classroom: aim the patch antenna and watch
+$130 of parts, an accidental RF classroom: aim the patch antenna and watch
 directionality appear on the map; swap in an antenna you made and the
-instrument tells you if it's better.
+instrument tells you if it's better. (The custom antenna boards were $40
+for a panel of 45 — the antenna is literally the cheapest part of the
+instrument that measures it.)
 
 ```
 ┌─────────────────────────────  M5View shell  ─────────────────────────────┐
@@ -60,8 +62,9 @@ instrument tells you if it's better.
 - **3D Viewer** — the original mesh renderer (int16 vertices, precomputed
   normals, bucket-sorted painter's algorithm) for `.mesh` files from SD;
   `tools/stl_to_mesh.py` converts STLs.
-- **Antenna** — 2.4GHz test suite (RSSI scope, channel scanner, polar plot,
-  walk test, multipath, A/B dwell) driving the internal/external switch.
+- **Antenna** — 2.4GHz test bench: a live RSSI oscilloscope and a
+  fast-sampling walk test, both driving the internal/external antenna
+  switch, with per-antenna running averages and CSV logging to SD.
 
 ## Repo layout
 

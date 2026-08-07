@@ -1123,39 +1123,33 @@ void handleSettingsTouch(){
 // ═══════════════════════════════════════════════════════════════════════════
 //  SCREEN: MENU
 // ═══════════════════════════════════════════════════════════════════════════
+// CULLED to the two tests that earn their place (field call): the
+// oscilloscope and the walk test, both with INT/EXT switching + CSV logging.
+// The other screens (channel scan, polar, timeline, multipath, A/B dwell,
+// polarisation, packet loss) never demoed reliably and their GUIs were
+// messy — the code remains below, unreachable, for post-contest revival.
 void drawMenuScreen(){
-    drawScreenHeader("Test Menu",C_WHITE);
-    struct MenuItem{ const char* name; Screen scr; bool enabled; uint16_t col; };
+    drawScreenHeader("Antenna Tests",C_WHITE);
+    struct MenuItem{ const char* name; const char* sub; uint16_t col; };
     MenuItem items[]={
-        {"Oscilloscope",  SCR_SCOPE,     true,                 C_INT},
-        {"Channel Scan",  SCR_CHANNEL,   g_cfg.channelScan,    C_CYAN},
-        {"Polar Plot",    SCR_POLAR,     g_cfg.polarPlot,      C_GOLD},
-        {"Walk Test",     SCR_WALK,      g_cfg.walkTest,       C_INT},
-        {"AP Timeline",   SCR_TIMELINE,  g_cfg.apTimeline,     C_PURP},
-        {"Multipath",     SCR_MULTIPATH, g_cfg.multipath,      C_EXT},
-        {"A/B Dwell",     SCR_ABDWELL,   g_cfg.abDwell,        C_BEXT},
-        {"Polarisation",  SCR_POL,       g_cfg.polarisation,   C_RED},
-        {"Packet Loss",   SCR_PKTLOSS,   g_cfg.pktLoss,        C_CYAN},
+        {"Oscilloscope", "live RSSI scope - INT vs EXT MMCX", C_INT},
+        {"Walk Test",    "fast sampling + distance estimate", C_EXT},
     };
-    int n=9, cols=3, rows=3;
-    int bw=W/cols, bh=(BY-HH-8)/rows;
+    int n=2;
+    int bw=W/2, bh=BY-HH-8;
     for(int i=0;i<n;i++){
-        int col=i%cols, row=i/cols;
-        int x=col*bw+4, y=HH+4+row*bh;
-        uint16_t bg=items[i].enabled?items[i].col:C_INACT;
-        M5.Display.fillRoundRect(x,y,bw-8,bh-6,8,bg);
-        M5.Display.drawRoundRect(x,y,bw-8,bh-6,8,C_SEP);
-        M5.Display.setTextSize(2);
-        M5.Display.setTextColor(C_WHITE,bg);
-        int len=strlen(items[i].name)*12;
-        M5.Display.setCursor(x+(bw-8-len)/2, y+bh/2-12);
+        int x=i*bw+8, y=HH+4;
+        M5.Display.fillRoundRect(x,y,bw-16,bh,12,items[i].col);
+        M5.Display.drawRoundRect(x,y,bw-16,bh,12,C_SEP);
+        M5.Display.setTextSize(3);
+        M5.Display.setTextColor(C_WHITE,items[i].col);
+        int len=strlen(items[i].name)*18;
+        M5.Display.setCursor(x+(bw-16-len)/2, y+bh/2-30);
         M5.Display.print(items[i].name);
-        if(!items[i].enabled){
-            M5.Display.setTextSize(1);
-            M5.Display.setTextColor(C_GRID,bg);
-            M5.Display.setCursor(x+8,y+bh/2+8);
-            M5.Display.print("(enable in Settings)");
-        }
+        M5.Display.setTextSize(1);
+        int slen=strlen(items[i].sub)*6;
+        M5.Display.setCursor(x+(bw-16-slen)/2, y+bh/2+8);
+        M5.Display.print(items[i].sub);
     }
     drawBtnBar("BACK",C_INACT,"EXIT APP",C_RED,"",C_BG,"SETTINGS",C_GOLD);
 }
@@ -1170,20 +1164,13 @@ void handleMenuTouch(){
         else if(t.x>=W*3/4) navigateTo(SCR_SETTINGS);
         return;
     }
-    // Menu grid
-    bool* enabled[]={nullptr,&g_cfg.channelScan,&g_cfg.polarPlot,&g_cfg.walkTest,
-                     &g_cfg.apTimeline,&g_cfg.multipath,&g_cfg.abDwell,
-                     &g_cfg.polarisation,&g_cfg.pktLoss};
-    Screen scrs[]={SCR_SCOPE,SCR_CHANNEL,SCR_POLAR,SCR_WALK,
-                   SCR_TIMELINE,SCR_MULTIPATH,SCR_ABDWELL,SCR_POL,SCR_PKTLOSS};
-    int cols=3, rows=3, n=9;
-    int bw=W/cols, bh=(BY-HH-8)/rows;
-    for(int i=0;i<n;i++){
-        int col=i%cols, row=i/cols;
-        int x=col*bw+4, y=HH+4+row*bh;
-        if(t.x>=x&&t.x<x+bw-8&&t.y>=y&&t.y<y+bh-6){
-            bool ok=(enabled[i]==nullptr||*enabled[i]);
-            if(ok) navigateTo(scrs[i]);
+    // Menu grid: two half-width tiles (see drawMenuScreen)
+    Screen scrs[]={SCR_SCOPE,SCR_WALK};
+    int bw=W/2, bh=BY-HH-8;
+    for(int i=0;i<2;i++){
+        int x=i*bw+8, y=HH+4;
+        if(t.x>=x&&t.x<x+bw-16&&t.y>=y&&t.y<y+bh){
+            navigateTo(scrs[i]);
             return;
         }
     }
