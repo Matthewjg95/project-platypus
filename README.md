@@ -120,9 +120,10 @@ python unitv_upload.py ../unitv/build/boot.py /flash/boot.py COM10
 **Debug niceties**
 - `python "Tab5 3D Render/tools/tab5_screenshot.py" COM6 out.bmp` — send
   `SS` over USB, get a pixel-perfect 1280x720 framebuffer capture.
-- `tools/serial_log.py` — timed telemetry capture (it diagnosed a camera
-  "freeze" as a cable-strain CRC storm: frames stalled while CRC errors
-  climbed, proving corrupt bytes on the wire, then flat-zero errors after).
+- `tools/serial_log.py` — timed telemetry capture (it localized an
+  intermittent camera freeze to corrupt bytes arriving on the link — frames
+  stalled while CRC errors climbed, receiver healthy throughout, resync
+  self-recovering within seconds).
 - Serial heartbeat `[hb] up/home/ota/heap` every 5s pinpoints any lockup.
 
 ## Hard-won hardware notes (the short list)

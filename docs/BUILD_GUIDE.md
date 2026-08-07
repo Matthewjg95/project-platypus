@@ -50,9 +50,8 @@ Any OS works; commands below are shown for Windows PowerShell.
 4. Optional: **external antenna** onto the Tab5's MMCX RF connector.
 5. Optional: battery / battery sled for untethered scanning.
 
-Strain-relieve the Grove cable (a loop of tape works): connector strain on
-a moving handheld rig was our #1 field fault — it presents as the camera
-"freezing" for a few seconds (CRC storm, self-recovers).
+Strain-relieve the Grove cable (a loop of tape works) — good practice on
+any handheld rig with a moving tether.
 
 ## 2. Flash the Unit V camera (15 minutes)
 
@@ -130,7 +129,7 @@ model path, detection threshold, anchors) live in `meshscan/unitv/config.py`
 |---|---|
 | "SD card not found" on boot | Tab5 SD not seated; reinsert, restart |
 | Scan shows no camera preview | Grove cable seated? Camera powered (LED)? Its USB console should show `[tele]` lines |
-| Preview freezes seconds at a time, recovers | CRC storm from cable strain — reseat/strain-relieve the Grove cable (see §1) |
+| Preview freezes seconds at a time, then recovers | Known intermittent: the link drops into a CRC-error window and the receiver resyncs itself within a few seconds. Root cause under investigation; continuing the sweep rides through it |
 | Detections but empty rooms | Sweep slower; ensure the room is well-lit (the K210 is light-hungry); check `[scan] uart ... crcErr` stays low on the serial monitor |
 | OTA "no response" | Device must be ON the home screen; same WiFi as your PC |
 | Tab5 dark after USB flash | It's parked in download mode — tap power once (§3.3) |
