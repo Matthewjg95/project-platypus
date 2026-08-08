@@ -23,14 +23,15 @@ public:
     void addBoxRoom(float cx, float cz, float width, float depth, float height);
     void addFloorPlate(float cx, float cz, float width, float depth,
                        float thickness = 0.06f);
-    // Carved floor from an occupancy grid (visibility-carved rooms): top and
-    // bottom surfaces as merged runs, skirt walls ONLY on boundary edges —
-    // one slab per row rendered dark seam stripes between interior rows.
-    // occ[gz*stride + gx] != 0 = floor cell; cell = cell size in metres;
-    // (minx, minz) = world position of cell (0,0)'s corner.
+    // Carved floor from an occupancy grid (visibility-carved rooms): top
+    // surface as merged runs, and boundary edges extruded into WALLS rising
+    // wall_h above the floor (both faces drawn — the renderer backface-culls
+    // and rooms are viewed from inside and outside). wall_h = 0 gives the
+    // old thin-skirt look. occ[gz*stride + gx] != 0 = floor cell; cell =
+    // cell size in metres; (minx, minz) = world of cell (0,0)'s corner.
     void addFloorCells(const uint8_t* occ, int stride, int nx, int nz,
                        float minx, float minz, float cell,
-                       float thickness = 0.06f);
+                       float thickness = 0.06f, float wall_h = 0.45f);
     // Flat arrow at the scan origin (0,0,0) pointing +Z — marks where the
     // scan began and the direction faced (the corner, per convention).
     void addOriginArrow(float half_w = 0.18f, float len = 0.45f);

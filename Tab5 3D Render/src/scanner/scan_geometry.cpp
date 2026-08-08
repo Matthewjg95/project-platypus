@@ -100,8 +100,9 @@ void ScanGeometry::addFloorPlate(float cx, float cz, float width, float depth,
 // slab-per-row version drew every row's side walls as dark corduroy stripes.
 void ScanGeometry::addFloorCells(const uint8_t* occ, int stride, int nx, int nz,
                                  float minx, float minz, float cell,
-                                 float thickness) {
+                                 float thickness, float wall_h) {
     const float y0 = -thickness, y1 = 0.0f;    // top surface = floor level y=0
+    const float yw = wall_h;                   // boundary walls rise to here
     auto at = [&](int gx, int gz) -> bool {
         return gx >= 0 && gz >= 0 && gx < nx && gz < nz &&
                occ[gz * stride + gx] != 0;
@@ -154,9 +155,11 @@ void ScanGeometry::addFloorCells(const uint8_t* occ, int stride, int nx, int nz,
                     float rx = (x0 + x1) * 0.5f;
                     float rz = side ? z + 1.0f : z - 1.0f;
                     uint32_t a=addVertex(x0,y0,z), b=addVertex(x1,y0,z),
-                             c=addVertex(x1,y1,z), d=addVertex(x0,y1,z);
-                    addOrientedTri(a,b,c, rx, -thickness*0.5f, rz, true);
-                    addOrientedTri(a,c,d, rx, -thickness*0.5f, rz, true);
+                             c=addVertex(x1,yw,z), d=addVertex(x0,yw,z);
+                    addOrientedTri(a,b,c, rx, yw*0.5f, rz, true);   // outer face
+                    addOrientedTri(a,c,d, rx, yw*0.5f, rz, true);
+                    addOrientedTri(a,b,c, rx, yw*0.5f, rz, false);  // inner face
+                    addOrientedTri(a,c,d, rx, yw*0.5f, rz, false);
                     run = -1;
                 }
             }
@@ -175,9 +178,11 @@ void ScanGeometry::addFloorCells(const uint8_t* occ, int stride, int nx, int nz,
                     float rz = (z0 + z1) * 0.5f;
                     float rx = side ? x + 1.0f : x - 1.0f;
                     uint32_t a=addVertex(x,y0,z0), b=addVertex(x,y0,z1),
-                             c=addVertex(x,y1,z1), d=addVertex(x,y1,z0);
-                    addOrientedTri(a,b,c, rx, -thickness*0.5f, rz, true);
-                    addOrientedTri(a,c,d, rx, -thickness*0.5f, rz, true);
+                             c=addVertex(x,yw,z1), d=addVertex(x,yw,z0);
+                    addOrientedTri(a,b,c, rx, yw*0.5f, rz, true);   // outer face
+                    addOrientedTri(a,c,d, rx, yw*0.5f, rz, true);
+                    addOrientedTri(a,b,c, rx, yw*0.5f, rz, false);  // inner face
+                    addOrientedTri(a,c,d, rx, yw*0.5f, rz, false);
                     run = -1;
                 }
             }

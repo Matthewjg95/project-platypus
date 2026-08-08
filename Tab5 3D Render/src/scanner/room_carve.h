@@ -99,6 +99,32 @@ inline void carve(uint8_t* occ, int gn, float cell,
             }
         stamp_seg(ax, az, o.x, o.z, R_LOS);
     }
+
+    // ---- smoothing: rooms, not amoebas ------------------------------
+    // The raw union of disc stamps has scalloped edges and pinholes; with
+    // walls extruded at the boundary that reads as melted wax. Two passes
+    // of a majority filter: lone spurs (<3 of 8 neighbours) erode, notches
+    // (>=5 of 8 neighbours) fill. Outlines become clean runs that mesh into
+    // straight wall segments, and the evidence-driven overall SHAPE stays.
+    static uint8_t src[64 * 64];
+    if (gn <= 64) {
+        for (int pass = 0; pass < 2; ++pass) {
+            memcpy(src, occ, (size_t)gn * gn);
+            for (int z = 0; z < nz; ++z)
+                for (int x = 0; x < nx; ++x) {
+                    int nbr = 0;
+                    for (int dz = -1; dz <= 1; ++dz)
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            if (!dx && !dz) continue;
+                            int xx = x + dx, zz = z + dz;
+                            if (xx >= 0 && zz >= 0 && xx < nx && zz < nz &&
+                                src[zz * gn + xx]) ++nbr;
+                        }
+                    if (src[z * gn + x]) occ[z * gn + x] = (nbr >= 3) ? 1 : 0;
+                    else                 occ[z * gn + x] = (nbr >= 5) ? 1 : 0;
+                }
+        }
+    }
 }
 
 } // namespace room_carve
