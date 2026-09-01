@@ -3,8 +3,9 @@
 > **STATUS (2026-09-01): selected post-contest architecture.**
 > The previous VL53L1X single-range plan is superseded by a VL53L8CX-class
 > 8x8 multizone ToF breakout mounted through an M5Stack Module Bus
-> (**SKU M024**) on the Tab5 rear M5-Bus. Hardware remains unpurchased/unverified
-> until the exact breakout, voltage requirements, and physical fit are closed.
+> (**SKU M024**) on the Tab5 rear M5-Bus. **Pololu item #3419** is the selected
+> purchasable breakout; purchase, Tab5 3.3 V rail capacity, bus behavior, and
+> physical fit remain to be verified before permanent assembly.
 
 ## Decision
 
@@ -23,10 +24,12 @@ rigid camera/ToF sensor pod
 ```
 
 The M024 is the wiring and mechanical prototype carrier. It is not a suitable
-land pattern for soldering a bare VL53L8CX package directly. Use a regulated,
-documented VL53L8CX breakout/module with accessible 2.54 mm pads, castellations,
-or a small interposer. The exact breakout is a procurement decision that must
-close before soldering.
+land pattern for soldering a bare VL53L8CX package directly. The selected
+interface board is the [Pololu VL53L8CX carrier, item #3419](https://www.pololu.com/product/3419):
+13 x 23 mm, populated with the sensor, dual regulators, level shifting,
+2.54 mm connections, and M2 mounting holes. Use it as a replaceable, rigidly
+mounted module rather than committing a development-board footprint to the
+future custom carrier.
 
 This keeps the current Unit V UART link unchanged and upgrades the room scanner
 from one range per heading to a 64-zone depth fan.
@@ -77,29 +80,63 @@ Relevant Tab5 M5-Bus signals:
 | 3.3 V | 3V3 | 12 | Breakout power only if its input specification permits |
 | Internal I2C data | G31 | 17 | ToF SDA |
 | Internal I2C clock | G32 | 18 | ToF SCL |
-| 5 V | switched EXT_5V_BUS | 28 | Use only if the selected breakout explicitly requires/accepts 5 V |
+| 5 V | switched EXT_5V_BUS | 28 | **Do not connect to Pololu #3419 in this I2C configuration** |
 | Spare GPIO | selected after conflict audit | TBD | Optional interrupt or low-power/shutdown control |
+
+Connector pin numbers are authoritative; apparent left/right position may mirror
+between the Tab5 rear receptacle and the mating M024. Do not wire by counting
+holes from a photograph. Verify the actual M024 nets with continuity mode before
+the Tab5 is powered.
+
+Relevant official connector rows:
+
+| Official left pin | Signal | Official right pin | Signal |
+|---:|---|---:|---|
+| 1 | GND | 2 | G16 |
+| 3 | GND | 4 | G17 |
+| 5 | GND | 6 | Reset |
+| 11 | G5 / SCK | **12** | **3V3** |
+| **17** | **G31 / internal SDA** | **18** | **G32 / internal SCL** |
+| 25 | **HVIN — prohibited** | 26 | G51 |
+| 27 | **HVIN — prohibited** | 28 | **5V — prohibited for this hookup** |
+| 29 | **HVIN — prohibited** | 30 | **BAT — prohibited** |
 
 The VL53L8CX default I2C address is 0x29, which does not collide with the
 currently documented Tab5 internal-bus occupants. The address check must be
 repeated against the actual firmware/hardware revision during bring-up.
 
-### Do not assume the module voltage
+### Selected Pololu #3419 wiring
 
-The bare VL53L8CX is not a generic four-wire 5 V Grove sensor. Before assembly,
-the selected breakout schematic must prove:
+The Pololu carrier accepts 3.2–5.5 V, but its level shifter pulls the host-side
+communication lines to the same voltage as `VIN`. ProjectPlatypus must therefore
+power `VIN` from the Tab5 **3.3 V** M5-Bus rail. Connecting Pololu `VIN` to
+M5-Bus pin 28 / 5 V risks applying 5 V to the Tab5's 3.3 V internal I2C bus.
 
-- allowed input-supply voltage;
-- I/O voltage and any level shifting;
-- onboard regulators and required decoupling;
-- I2C pull-up values and pull-up rail;
-- availability/default state of LPn, INT, and I2C/SPI selection pins;
-- connector/pad pinout and orientation;
-- optical cover/window guidance.
+| Pololu #3419 pin | M024 / Tab5 destination | Rev-A state | Reason |
+|---|---|---|---|
+| `VIN` | **M5-Bus pin 12 — 3V3** | Connect | Power and 3.3 V host-side logic reference |
+| `GND` | **M5-Bus pin 1, 3, or 5 — GND** | Connect | Common return |
+| `SDA/MOSI` | **M5-Bus pin 17 — G31 / internal SDA** | Connect | Shared internal I2C data |
+| `SCL/MCLK` | **M5-Bus pin 18 — G32 / internal SCL** | Connect | Shared internal I2C clock |
+| `SPI/I2C` | **GND** | Connect permanently | Low selects I2C; default/high selects SPI |
+| `LP` | No connection initially | Leave open | Carrier pulls it high; retain for later address/reset control |
+| `INT` | No connection initially | Leave open | Optional data-ready interrupt |
+| `CS` | No connection | Leave open | SPI-only |
+| `MISO` | No connection | Leave open | SPI-only |
+| `SYNC` | No connection | Leave open | Optional external acquisition trigger |
+| `AVDD` | **Do not connect** | Regulator output | Not a power input |
+| `CORE/IOVDD` | **Do not connect** | Regulator output | Not a power input |
 
-Prefer powering a compatible breakout from 3.3 V. Use the Tab5 switched 5 V
-rail only when the breakout documentation explicitly supports it and firmware
-enables `EXT5V_EN`.
+The Pololu board typically draws about 100 mA while ranging and can peak near
+150 mA. M5Stack exposes 3V3 on M5-Bus pin 12 but does not publish an external
+current allowance on the Tab5 product page. Confirm that allowance with M5Stack
+or validate the rail before permanent integration. If the rail cannot support
+the sensor, redesign power using the switched 5 V rail plus a dedicated 3.3 V
+regulator; do not move Pololu `VIN` directly to 5 V while it shares Tab5 I2C.
+
+The carrier's level shifter is sensitive to external loading. Keep SDA/SCL
+wiring ideally below 8 cm, do not add pull-ups by default, begin at 400 kHz or
+lower, and test the existing touch and IMU throughout bring-up.
 
 ### M024 prototype assembly
 
@@ -115,9 +152,35 @@ Minimum Rev-A build controls:
 - first power from a current-limited source where practical;
 - never hot-plug or rewire the M5-Bus.
 
-A direct soldered prototype is acceptable after the breakout is verified.
-The later clean solution is a small purpose-built M5-Bus depth/expansion PCB
-derived from measured M024 results.
+A socketed/headered or short-wire prototype is acceptable after the breakout is
+verified. Use the Pololu M2 holes to carry mechanical load; solder joints must
+not locate the optical axis. The later clean solution is a small purpose-built
+M5-Bus depth/expansion PCB derived from measured M024 results.
+
+### No-fry assembly and first-power sequence
+
+1. **Remove every power source.** Shut down, disconnect USB, remove/disconnect
+   the battery, and wait at least five seconds. Never insert or rewire M5-Bus live.
+2. **Map M024 with no sensor attached.** Use continuity mode to identify M5-Bus
+   pins 12, 17, 18, and one of 1/3/5 on the actual module. Label the destination
+   pads; do not rely on a photo or connector-view orientation.
+3. **Verify M024 alone.** With only M024 inserted, power Tab5 and measure at the
+   spacious verified pads: pin 12 to GND approximately 3.3 V; SDA and SCL should
+   not show 5 V. Power down and remove all power again.
+4. **Inspect the disconnected sensor assembly.** Verify `SPI/I2C` continuity
+   to GND; no hard short from `VIN` to GND; SDA and SCL are not shorted to each
+   other, GND, or 5 V; `AVDD` and `CORE/IOVDD` remain unconnected.
+5. **Continuity-check end to end.** Confirm Pololu `VIN` reaches only M5 pin
+   12, GND reaches only the chosen ground, SDA reaches only pin 17, and SCL
+   reaches only pin 18.
+6. **Insert only while off.** Secure the board and wires before power. Do not
+   hold loose probes or clips near the live rear connector.
+7. **First boot.** Check for heat, resets, display/touch trouble, or abnormal
+   current. Power off immediately if any appears. Scan for address 0x29 before
+   starting ranging.
+8. **Functional safety check.** Exercise touch and IMU while acquiring 4x4 at
+   10 Hz. Record timeouts and responsiveness before attempting 8x8 or a higher
+   rate.
 
 ---
 
@@ -310,8 +373,9 @@ loading and INT/EXT antenna separation.
 
 ### Stage 0 — bench and fit proof
 
-- Obtain exact VL53L8CX breakout documentation.
-- Dry-fit Tab5 + M024 + camera + patch antenna/cable.
+- Purchase Pololu VL53L8CX carrier #3419 and retain its schematic/product documentation.
+- Confirm Tab5 M5-Bus 3.3 V external-current allowance or validate the rail.
+- Dry-fit Tab5 + M024 + Pololu carrier + camera + patch antenna/cable.
 - Decide direct M024 mount versus remote rigid sensor pod.
 - Verify power, I2C pull-ups, address, and control pins.
 - Capture current draw and thermal observations.
@@ -363,9 +427,10 @@ Carry forward test points, strain relief, labels, and configuration options.
 | M5Stack Tab5 | 1 | owned |
 | Unit V K210 camera + Grove cable | 1 | owned/current |
 | M5Stack Module Bus M024 | 1 | selected prototype carrier |
-| VL53L8CX regulated breakout/module | 1 | exact model TBD; schematic required |
-| Insulated hookup wire / headers | as needed | select after breakout |
-| Local decoupling and optional pull-up/configuration parts | TBD | derive from breakout schematic |
+| [Pololu VL53L8CX carrier #3419](https://www.pololu.com/product/3419) | 1 | **selected; purchase pending** |
+| 2.54 mm headers/socket or short insulated hookup wire | as needed | keep SDA/SCL under 8 cm |
+| M2 nylon fasteners/standoffs | as needed | carry mechanical load and preserve optical pose |
+| Additional pull-ups | 0 initially | only add from measured bus evidence |
 | Rigid camera/ToF bracket or sensor pod | 1 | design after dry fit |
 | External patch antenna + cable | 1 | retain when mechanically compatible |
 
@@ -386,7 +451,9 @@ The architecture advances beyond M024 prototype when:
 ## Principal risks
 
 - shared-I2C bandwidth or driver integration on ESP32-P4;
-- wrong breakout voltage/pull-up assumptions;
+- Pololu level-shifter sensitivity on the already-populated internal I2C bus;
+- unverified Tab5 3.3 V external-current allowance;
+- accidental use of M5-Bus 5 V/HVIN/BAT or connector-view mirroring;
 - rear-module, hand, camera, and patch-antenna interference;
 - flexible mounting corrupting camera/ToF calibration;
 - 4 m limit in large rooms or from corner-origin scans;
@@ -401,3 +468,4 @@ The architecture advances beyond M024 prototype when:
 - [ST VL53L8CX product page](https://www.st.com/en/imaging-and-photonics-solutions/vl53l8cx.html)
 - [ST VL53L8CX datasheet](https://www.st.com/content/st_com/en/technical-documents/DS14161.html)
 - [ST VL53L8CX user manual UM3109](https://www.st.com/content/st_com/en/technical-documents/UM3109.html)
+- [Pololu VL53L8CX carrier #3419 documentation](https://www.pololu.com/product/3419)
