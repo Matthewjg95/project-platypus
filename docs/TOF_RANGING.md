@@ -1,151 +1,403 @@
-# ToF Wall Ranging — Research & Integration Plan
+# VL53L8CX Depth Ranging — Research & Integration Plan
 
-> **STATUS (2026-08-01): post-contest revision.** ToF hardware + custom
-> enclosure are roadmapped for after the Aug 7 contest deadline. Until then
-> the camera-only path carries layout: visibility-carved floors (occupancy
-> union of origin + objects + sight-lines) replaced the rectangular plate.
+> **STATUS (2026-09-01): selected post-contest architecture.**
+> The previous VL53L1X single-range plan is superseded by a VL53L8CX-class
+> 8x8 multizone ToF breakout mounted through an M5Stack Module Bus
+> (**SKU M024**) on the Tab5 rear M5-Bus. Hardware remains unpurchased/unverified
+> until the exact breakout, voltage requirements, and physical fit are closed.
 
-**Goal:** during the same 360° sweep-dial scan, sample a real distance at every
-bearing → the scan produces the room's **actual measured wall outline** (a polar
-polygon) instead of a bounding plate inferred from object extents. Objects from
-the camera land inside it; the RF heatmap paints onto true room geometry.
+## Decision
 
-This is the single biggest layout upgrade available: rotation-only sweeps give
-the camera zero parallax (no depth from motion is possible), and the K210 only
-emits 2D boxes — but a ToF ranger measures distance directly.
+ProjectPlatypus will preserve the Unit V camera on the only Grove port and use
+the rear M5-Bus for depth. The prototype path is:
 
----
+```
+Tab5 rear M5-Bus
+        |
+      M024
+  power + I2C + optional control GPIO
+        |
+VL53L8CX breakout
+        |
+rigid camera/ToF sensor pod
+```
 
-## Hardware findings (researched 2026-08-01)
+The M024 is the wiring and mechanical prototype carrier. It is not a suitable
+land pattern for soldering a bare VL53L8CX package directly. Use a regulated,
+documented VL53L8CX breakout/module with accessible 2.54 mm pads, castellations,
+or a small interposer. The exact breakout is a procurement decision that must
+close before soldering.
 
-### The bus problem is solved — no Grove conflict
+This keeps the current Unit V UART link unchanged and upgrades the room scanner
+from one range per heading to a 64-zone depth fan.
 
-The Unit V camera owns the Grove port's pins (G53/G54) as UART, and the U006
-hub is a passive splitter — UART + I2C can never share those pins. But the
-Tab5's **M5-Bus 30-pin header exposes the internal I2C bus directly**:
+## Why this matters
 
-| M5-Bus pin | Signal |
-|-----------|--------|
-| SDA | **G31** |
-| SCL | **G32** |
-| 5V / 3V3 / GND | power |
+The current room is visibility-carved from:
 
-G31/G32 is the same bus as the BMI270 IMU, RTC, touch, audio codec, and the
-PI4IOE5V6408 expanders (0x43/0x44) — i.e. **`M5.In_I2C`, the exact API the
-antenna applet already uses**. Proven code path, zero new drivers to bring up.
+- the scan origin;
+- detected object footprints;
+- sight-line corridors to those objects;
+- the WALK+ path.
 
-Address check — internal bus occupants: 0x10, 0x14/0x55, 0x32, 0x40, 0x41,
-0x43, 0x44, 0x68. The ToF's **0x29 is free**. Traffic check: M5Unified
-serializes In_I2C transactions; a 20–30 Hz ToF poll is light next to touch+IMU.
+That is useful evidence, but it does not directly observe walls. During a
+360-degree sweep the VL53L8CX can measure many spatial rays at each orientation.
+The mapper can mark space before each valid return as free and treat the return
+as surface evidence. The resulting wall polygon and occupancy grid improve:
 
-### Sensor choice
+- wall, corner, doorway, and opening detection;
+- camera-object distance and placement;
+- WALK+ drift correction from structural landmarks;
+- rescanning registration;
+- RF heatmap clipping and wall-aware interpretation;
+- room-geometry export for later CAD/Fusion workflows.
 
-| Unit | Sensor | Range | Notes |
-|------|--------|-------|-------|
-| **Unit ToF4M (recommended)** | VL53L1X | 4 mm – 4 m | ~30–50 ms/reading, I2C 0x29, ~27° FoV (narrowable to ~15° via ROI) |
-| Unit ToF | VL53L0X | up to 2 m | cheaper, but 2 m is too short for wall ranging across a room |
-| Mini ToF 90° | VL53L0CXV0DH | 2 m | right-angle form factor — interesting for the enclosure, same 2 m limit |
-
-**ToF4M** it is: 4 m covers typical rooms from the center; 0x29 on In_I2C.
-
-### Wiring
-
-Grove pigtail (Grove-to-Dupont cable, ~$2) from the ToF4M onto the M5-Bus
-header: 5V, GND, SDA→G31, SCL→G32. Grove I2C logic is 3.3 V — matches the
-internal bus. The enclosure routes/strains this cable.
-
-### BOM
-
-- M5Stack Unit ToF4M (VL53L1X) — ~$9
-- Grove-to-Dupont conversion cable — ~$2
-- (already owned) Unit V camera on the Grove port, unchanged
+The 8x8 result is coarse depth evidence, not a precision CAD point cloud.
 
 ---
 
-## Sampling math — it fits the sweep perfectly
+## Hardware path
 
-A sweep takes ~20–60 s over 360°. At a conservative 20 Hz ToF poll:
+### Grove port remains camera-only
 
-- 20–60 s × 20 Hz = **400–1200 range samples per sweep**
-- one reading every **0.3–0.9° of rotation** — massively oversampled for a
-  wall outline binned at 5° (72 bearings)
+The Unit V camera continues to own the Tab5 HY2.0-4P Grove port at G53/G54 as
+UART. A passive Grove hub is not used to mix this UART with I2C.
 
-Pipeline per sweep: tag each reading with the IMU yaw at capture → bin into 72
-bearings → **median per bin** (same robustness philosophy as object ranging) →
-polar polygon.
+### Rear M5-Bus and M024
 
-Refinements after the raw polygon works:
-1. Split-and-merge line fitting → straight wall segments from the polygon
-2. Optional Manhattan snap (90° corners) using the Hough confidence we
-   already compute in RoomFitter
-3. Corner extraction → the "face a corner" origin convention becomes a
-   *measured* anchor, which also gives rescan registration a hard landmark
+M5Stack documents the Tab5 rear connector as supporting Module-series M5-Bus
+expansion. The M024 provides a 54 x 54 mm, 2.54 mm-pitch, 200-hole prototyping
+field connected to that bus.
 
-The 27° sensor cone slightly rounds corners (reads the nearest surface in the
-cone); VL53L1X ROI configuration can narrow it to ~15° if that matters.
+Relevant Tab5 M5-Bus signals:
 
-### Portability note (standing principle)
+| Function | Tab5 signal | M5-Bus pin | Intended use |
+|---|---:|---:|---|
+| Ground | GND | 1, 3, or 5 | ToF ground |
+| 3.3 V | 3V3 | 12 | Breakout power only if its input specification permits |
+| Internal I2C data | G31 | 17 | ToF SDA |
+| Internal I2C clock | G32 | 18 | ToF SCL |
+| 5 V | switched EXT_5V_BUS | 28 | Use only if the selected breakout explicitly requires/accepts 5 V |
+| Spare GPIO | selected after conflict audit | TBD | Optional interrupt or low-power/shutdown control |
 
-The wall-ranging pipeline consumes `(yaw_rad, distance_m)` pairs — nothing
-else. Any ranger (I2C ToF, UART lidar module, ultrasonic) that produces those
-pairs slots in behind the same interface. Keep the sensor driver ~40 lines and
-isolated in `src/scanner/tof_ranger.h`.
+The VL53L8CX default I2C address is 0x29, which does not collide with the
+currently documented Tab5 internal-bus occupants. The address check must be
+repeated against the actual firmware/hardware revision during bring-up.
 
----
+### Do not assume the module voltage
 
-## Beyond the ToF: the M5-Bus as an expansion backbone
+The bare VL53L8CX is not a generic four-wire 5 V Grove sensor. Before assembly,
+the selected breakout schematic must prove:
 
-The ToF finding generalizes. The camera owns the Grove port's pins as UART —
-but the M5-Bus header exposes the **internal I2C bus (SDA G31 / SCL G32)**,
-and I2C is a *bus*: every additional I2C peripheral shares those two pins,
-distinguished by address. Current occupants: 0x10, 0x14/0x55, 0x32, 0x40,
-0x41, 0x43, 0x44, 0x68. That leaves room for:
+- allowed input-supply voltage;
+- I/O voltage and any level shifting;
+- onboard regulators and required decoupling;
+- I2C pull-up values and pull-up rail;
+- availability/default state of LPn, INT, and I2C/SPI selection pins;
+- connector/pad pinout and orientation;
+- optical cover/window guidance.
 
-| Peripheral | Address | Status |
-|---|---|---|
-| ToF ranger (VL53L1X) | 0x29 | free — this doc's plan |
-| M5 Joystick unit | 0x63 | free — **the driver already sits in-tree**
-  (`src/joystick_input.h`), disabled since the joystick was unplugged from
-  the camera's UART pins; it wires straight back up here |
-| Any Grove I2C unit (env sensors, encoders, …) | varies | check the map |
+Prefer powering a compatible breakout from 3.3 V. Use the Tab5 switched 5 V
+rail only when the breakout documentation explicitly supports it and firmware
+enables `EXT5V_EN`.
 
-The M5-Bus also carries SPI, UART0, RS485, and ~13 free GPIOs for
-peripherals that aren't I2C.
+### M024 prototype assembly
 
-**The physical layer — "Design B":** Grove pigtails onto header pins work
-for one device but not for a rig. The clean answer is a small custom
-breakout PCB — M5-Bus header in, 3-4 Grove (HY2.0-4P) jacks out, all
-sharing the internal I2C + power. The antenna fab run cost $40 for 45
-boards; an expansion breakout is the same order of trivial. One board turns
-the Tab5's back into a proper peripheral bay — which is exactly what the
-enclosure below should assume.
+Minimum Rev-A build controls:
 
-## Enclosure (next phase)
+- socket/stack the M024 into the Tab5 rear connector with power off;
+- use insulated solid wire or short secured jumpers on the M024;
+- add local decoupling at the breakout per its manufacturer;
+- provide strain relief so sensor-pod movement cannot work the solder joints;
+- expose SDA, SCL, power, ground, and optional control test points;
+- label pin 1, voltage, and sensor-forward direction;
+- perform continuity and short checks before attaching the Tab5;
+- first power from a current-limited source where practical;
+- never hot-plug or rewire the M5-Bus.
 
-Once camera + ToF + Tab5 travel together, a 3D-printed bracket becomes the
-right move:
-
-- **Rigid co-aim is the whole game:** ToF and camera optical axes parallel,
-  both normal to the Tab5 back. A fixed yaw offset between them is fine —
-  one constant in software — but it must not flex scan-to-scan.
-- Back-shell clamshell around the Tab5 with a sensor pod top-center:
-  Unit V + ToF4M side by side, Grove cable channel to the port, pigtail
-  channel to the M5-Bus header (header access must stay open).
-- Keep the power button, USB-C, speaker grille, and antenna connectors clear;
-  leave the kickstand/hand-strap question for the design session.
-- Stretch: the pod prints as a separate swappable module — future sensors
-  (lidar, better camera) get a new pod, not a new shell. Matches the
-  modularity principle.
+A direct soldered prototype is acceptable after the breakout is verified.
+The later clean solution is a small purpose-built M5-Bus depth/expansion PCB
+derived from measured M024 results.
 
 ---
 
-## Integration order (when the ToF4M arrives)
+## Mechanical and antenna coexistence
 
-1. `tof_ranger.h`: VL53L1X init + poll on `M5.In_I2C` (0x29), ~40 lines
-2. Scan loop: sample (yaw, mm) at poll rate during SCAN; store 72-bin medians
-3. `.wall` sidecar beside the mesh (bearing/distance table, "WAL1")
-4. Mesh: replace the rectangular plate with the measured floor polygon +
-   optional low wall ribs at the polygon edges
-5. Sweep dial: draw the wall trace ON the ring as it's measured — the dial
-   literally becomes a live floor-plan radar (contest demo gold)
-6. RF survey: heatmap clipped/painted onto the measured polygon
+### Rigid co-aim is mandatory
+
+The ToF and Unit V optical relationship must not flex between scans. Record the
+six-degree-of-freedom transform from ToF coordinates into the camera/IMU frame.
+A known offset is acceptable; a changing offset is not.
+
+The M024 may carry the breakout directly only if that orientation points the
+sensor into the same scene as the camera. Otherwise it should carry the
+electrical interface and a short, strain-relieved connection to a rigid
+camera/ToF pod.
+
+The enclosure/pod must control:
+
+- ToF aperture and field-of-view clearance;
+- camera and ToF axis alignment;
+- cover-window material, air gap, crosstalk, and calibration;
+- illumination leakage into the ToF aperture;
+- cable bend radius and connector access;
+- repeatable attachment to the Tab5.
+
+### Patch antenna decision
+
+The external directional patch antenna is a defining RF-survey capability, so
+removing it is allowed as a prototype fallback, not the default architecture.
+
+Use this priority order:
+
+1. **Coexist:** fit the M024/ToF and patch antenna together; relocate the
+   cable-mounted patch outside the ToF field of view if needed.
+2. **Mode-dependent attachment:** use a removable or repositionable patch so
+   geometry scanning and directional RF surveying retain their best sensor
+   arrangements.
+3. **Temporary removal:** remove the patch for initial depth bring-up or room
+   scanning only if it physically blocks the M024, sensor pod, or optical field.
+   The Tab5 internal antenna remains the fallback RF path.
+
+Before committing an enclosure, perform a physical interference study covering
+the M024 envelope, header engagement, patch/cable bend radius, hand placement,
+ToF field of view, Unit V view, and Tab5 buttons/USB/speaker access.
+
+Removing the patch means the EXT heat layer and directional-bearing experiments
+are unavailable for that configuration; the software and saved survey format
+must continue to preserve INT/EXT separation.
+
+---
+
+## Shared I2C bus risk
+
+G31/G32 also serve Tab5 touch, IMU, RTC, audio, current monitoring, and I/O
+expanders through `M5.In_I2C`. A multizone frame is materially heavier than
+the old VL53L1X scalar read, so the earlier assumption that 20-30 Hz is “light”
+does not automatically carry forward.
+
+Bring-up matrix:
+
+| Mode | Initial target | Measure |
+|---|---:|---|
+| 4x4 depth | 10 Hz | frame latency, valid zones, IMU/touch responsiveness |
+| 8x8 depth | 10 Hz | bus utilization, missed IMU samples, UI latency |
+| 8x8 depth | 15 Hz | only after 10 Hz passes |
+| Multi-target output | lowest useful rate | memory and transfer cost versus mapping value |
+
+Requirements:
+
+- serialize access through the established internal-I2C path;
+- keep acquisition asynchronous from rendering and file writes;
+- timestamp the completed depth frame and the associated IMU pose;
+- count timeouts, invalid frames, IMU gaps, and UI stalls;
+- retain a reduced-rate/4x4 fallback;
+- do not starve the IMU whose orientation makes the depth data useful.
+
+The rear M5-Bus also exposes SPI-capable pins, but switching the VL53L8CX to SPI
+is a later option requiring an exact breakout pinout, conflict audit, and driver
+proof. I2C is the first implementation.
+
+---
+
+## Data contract
+
+The old portable interface of `(yaw_rad, distance_m)` discards most of the
+selected sensor's value. Preserve a complete sensor-neutral frame:
+
+```cpp
+struct DepthTarget {
+    uint16_t distance_mm;
+    uint16_t signal_rate;
+    uint16_t sigma_mm;
+    uint16_t ambient_rate;
+    uint8_t  status;
+};
+
+struct DepthFrame {
+    uint32_t timestamp_ms;
+    SensorPose sensor_pose;
+    uint8_t rows;
+    uint8_t cols;
+    uint8_t targets_per_zone;
+    DepthTarget zones[64]; // extend storage if multi-target mode earns its cost
+};
+```
+
+The implementation may use smaller/native types, but must preserve:
+
+- timestamp;
+- sensor pose and calibration identity;
+- zone location/FOV;
+- distance;
+- validity/status;
+- uncertainty or sigma;
+- signal and ambient-light quality where exposed;
+- target index when multi-target mode is enabled.
+
+A compatibility adapter may collapse selected zones into scalar
+`RangeSample { yaw, distance }` records for the first wall-polygon experiment.
+
+---
+
+## Mapping pipeline
+
+For every valid zone:
+
+1. associate the frame with interpolated IMU yaw/pitch/roll;
+2. apply the calibrated ToF-to-device transform;
+3. generate the zone ray from the sensor field-of-view model;
+4. transform it into room coordinates;
+5. mark cells before the return as observed free space;
+6. mark the return neighborhood as surface evidence;
+7. reject or down-weight poor status, high sigma, weak signal, or excessive
+   ambient-light observations;
+8. accumulate repeat observations before fitting walls.
+
+Derived products:
+
+- **2D wall polygon:** use the most useful middle rows, median/filter spatially,
+  then fit straight segments and corners;
+- **occupancy/free-space grid:** preserve all useful zones;
+- **door/opening candidates:** sustained gaps/far returns between stable wall
+  bands, requiring multiple viewpoints before confirmation;
+- **vertical context:** upper/lower rows help distinguish wall, floor, ceiling,
+  and foreground clutter when pitch calibration is adequate.
+
+Do not assume that multi-target ranging sees through opaque furniture. It may
+separate returns within a zone under supported conditions, but background-wall
+recovery remains evidence-dependent.
+
+---
+
+## Camera and WALK+ fusion
+
+For each Unit V detection, project its bounding-box center and coverage into the
+ToF grid:
+
+- use valid ToF range as the preferred object-depth measurement;
+- retain the current known-size monocular estimate as fallback and cross-check;
+- reject or flag large disagreement;
+- distinguish foreground object depth from background-wall depth where the
+  multizone/multi-target evidence supports it;
+- store the ranging method and confidence with the object landmark.
+
+For WALK+, compare observed wall/corner depth signatures against the accumulated
+map. Use those matches to constrain drift; do not present this as full visual
+SLAM until its error is measured.
+
+---
+
+## RF survey integration
+
+The existing RF sample already records position, RSSI, antenna selection, and
+heading. Do not attach every raw 64-zone frame to every RF record. Associate RF
+samples with derived spatial context or a depth/map revision:
+
+- nearest-wall distance and bearing;
+- free-space/obstruction state in the antenna aim direction;
+- room/opening identifier;
+- walls intersecting a candidate AP-bearing ray;
+- geometry/depth revision and confidence.
+
+This supports wall-aware interpretation without breaking the existing RFS4
+survey format prematurely. A future format revision must retain backward
+loading and INT/EXT antenna separation.
+
+---
+
+## Staged implementation
+
+### Stage 0 — bench and fit proof
+
+- Obtain exact VL53L8CX breakout documentation.
+- Dry-fit Tab5 + M024 + camera + patch antenna/cable.
+- Decide direct M024 mount versus remote rigid sensor pod.
+- Verify power, I2C pull-ups, address, and control pins.
+- Capture current draw and thermal observations.
+- Pass the I2C matrix above before modifying room geometry.
+
+### Stage 1 — scalar compatibility
+
+- Add an isolated VL53L8CX driver/adapter.
+- Run 4x4 at 10 Hz initially.
+- Collapse valid middle zones into 72 five-degree bearing bins.
+- Save a versioned `.wall` sidecar and render a live polar trace.
+- Compare repeated scans of one measured rectangular room.
+
+### Stage 2 — full depth fan
+
+- Preserve 8x8 frames and quality fields.
+- Implement calibrated zone rays and occupancy/free-space accumulation.
+- Fit wall segments/corners and replace visibility-carve boundaries where ToF
+  evidence is valid.
+- Retain visibility carve as fallback for unobserved/out-of-range areas.
+
+### Stage 3 — camera and pose fusion
+
+- Associate Unit V detections with zones.
+- Compare ToF versus monocular distance errors.
+- Add structural correction experiments to WALK+.
+- Record failure cases: glass, dark/absorptive targets, reflective surfaces,
+  oblique walls, strong ambient light, and ranges beyond 4 m.
+
+### Stage 4 — RF context and export
+
+- Clip heatmaps to the measured room polygon.
+- Add wall-aware RF context and AP-bearing intersection experiments.
+- Export simplified room geometry and evidence metadata for desktop/Fusion
+  workflows without claiming CAD-grade accuracy.
+
+### Stage 5 — purpose-built board
+
+Promote the M024 prototype into a custom M5-Bus board only after the driver,
+bus rate, mechanical pose, antenna coexistence, and power arrangement pass.
+Carry forward test points, strain relief, labels, and configuration options.
+
+---
+
+## Prototype BOM
+
+| Item | Qty | Status |
+|---|---:|---|
+| M5Stack Tab5 | 1 | owned |
+| Unit V K210 camera + Grove cable | 1 | owned/current |
+| M5Stack Module Bus M024 | 1 | selected prototype carrier |
+| VL53L8CX regulated breakout/module | 1 | exact model TBD; schematic required |
+| Insulated hookup wire / headers | as needed | select after breakout |
+| Local decoupling and optional pull-up/configuration parts | TBD | derive from breakout schematic |
+| Rigid camera/ToF bracket or sensor pod | 1 | design after dry fit |
+| External patch antenna + cable | 1 | retain when mechanically compatible |
+
+## Acceptance criteria
+
+The architecture advances beyond M024 prototype when:
+
+- 100 consecutive frames acquire without bus lockup;
+- touch and IMU remain responsive at the selected scan rate;
+- repeat scans of a known room produce bounded wall/corner error;
+- the camera/ToF transform remains repeatable after handling;
+- the aperture/window does not create unacceptable crosstalk;
+- RF INT operation is unaffected and the EXT patch configuration is either
+  retained or its mode-dependent mounting is documented;
+- every saved depth-derived result records calibration, quality, and method;
+- failure cases and fallback behavior are visible rather than silently accepted.
+
+## Principal risks
+
+- shared-I2C bandwidth or driver integration on ESP32-P4;
+- wrong breakout voltage/pull-up assumptions;
+- rear-module, hand, camera, and patch-antenna interference;
+- flexible mounting corrupting camera/ToF calibration;
+- 4 m limit in large rooms or from corner-origin scans;
+- optical-window crosstalk and blocked field of view;
+- low-resolution depth being overrepresented as CAD-quality geometry;
+- loss of RF differentiation if the external patch is permanently removed.
+
+## Sources
+
+- [M5Stack Tab5 documentation](https://docs.m5stack.com/en/core/Tab5)
+- [M5Stack Module Bus M024 documentation](https://docs.m5stack.com/en/module/bus)
+- [ST VL53L8CX product page](https://www.st.com/en/imaging-and-photonics-solutions/vl53l8cx.html)
+- [ST VL53L8CX datasheet](https://www.st.com/content/st_com/en/technical-documents/DS14161.html)
+- [ST VL53L8CX user manual UM3109](https://www.st.com/content/st_com/en/technical-documents/UM3109.html)
