@@ -6,6 +6,11 @@ signal onto the map it just drew, one heat layer per antenna, including a
 custom patch antenna PCB. No imported floor plans anywhere in the loop: the
 instrument draws its own.
 
+> **Status (Sep 2026): submitted to the M5Stack Global Innovation Contest 2026 —
+> not selected. This repository is the frozen submission snapshot and is
+> archived. Development continues in the lab repo (`platypus-lab`, private),
+> which carries the full applet set including ShadowScan.**
+
 Built for the **M5Stack Global Innovation Contest 2026**, as an exercise in
 pushing the Tab5 (ESP32-P4) and friends to their limits — and, at roughly
 $130 of parts, an accidental RF classroom: aim the patch antenna and watch
