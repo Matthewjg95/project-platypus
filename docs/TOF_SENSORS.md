@@ -1,5 +1,48 @@
 # Time-of-Flight Sensors — How They Actually Work
 
+> **CURRENT STATUS (2026-09-20):** The VL53L1X integration described later in
+> this document is retained as historical research, not the active hardware
+> plan. The current Project Platypus prototype is the Pololu VL53L8CX carrier
+> through Tab5/M024 as defined in [TOF_RANGING.md](TOF_RANGING.md). Bench work
+> is governed by [TOF_TEST_PLAN.md](TOF_TEST_PLAN.md). No result from this
+> prototype changes the PlatypusOne BOM without its separate ADR gate.
+
+## Current sensor architecture and successor watch
+
+| Capability | VL53L1X legacy option | VL53L8CX active prototype | VL53L9CX future candidate |
+|---|---:|---:|---:|
+| Depth zones | scalar/ROI | 8×8 (64) | up to 54×42 (2,268) |
+| Published range | up to 4 m | up to 4 m | 5 cm to 8.8 m |
+| Published maximum rate | timing-budget dependent | 60 Hz | 100 Hz |
+| Principal output | distance/status | multizone distance/status/motion | depth, active IR, ambient, reflectance, confidence |
+| Main interface | I²C | I²C or SPI | MIPI CSI-2 or I3C; reduced-rate I²C possible |
+| Integration class | simple ranger | embedded multizone sensor | camera-class depth module |
+| Project state | superseded | ordered; not yet bench-verified | research candidate only |
+
+The VL53L9CX is materially more capable, but it is not a drop-in upgrade. Its
+full-rate path uses a one-data-lane MIPI CSI-2 interface at up to 1 Gbps and
+requires multiple rails plus an application clock. It belongs in a later Linux
+host/carrier evaluation, not on the current Tab5 M024 wiring experiment.
+
+For a future PlatypusOne “Platinum” configuration, the L9CX could provide dense
+depth constraints aligned with RGB capture, confidence-aware foreground
+separation, guided-view coverage, and stronger evidence for Mesh2CAD. It is
+still not a metrology instrument by itself. ST's specified short-range
+accuracy for the 54×42 precision profile is millimetre-class but distinct from
+its smaller temporal noise; calibration, a scale reference, and user-locked
+dimensions remain required.
+
+Authoritative current sources:
+
+- [ST VL53L8CX product page](https://www.st.com/en/imaging-and-photonics-solutions/vl53l8cx.html)
+- [ST VL53L9CX product page](https://www.st.com/en/imaging-and-photonics-solutions/vl53l9cx.html)
+- [ST VL53L9CX datasheet](https://www.st.com/resource/en/datasheet/vl53l9cx.pdf)
+- [ST STEVAL-VL53L9 evaluation board](https://www.st.com/en/evaluation-tools/steval-vl53l9.html)
+
+The remaining sections explain useful ToF physics and the earlier VL53L1X
+concept. Treat sensor-specific implementation statements below as legacy unless
+the current plan repeats them.
+
 Research companion to `TOF_RANGING.md` (which covers our integration plan).
 This is the physics and engineering background for the VL53L1X that's about
 to join the instrument — what it measures, how, and where it lies.
